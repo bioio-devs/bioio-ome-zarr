@@ -1,0 +1,10 @@
+default_context:
+    author_name: "bioio-devs"
+    author_email: "brian.whitney@alleninstitute.org"
+    hosting_github_username_or_org: "BrianWhitneyAI"
+    project_name: "bioio-ome-zarr"
+    project_slug: "bioio-ome-zarr"
+    python_slug: "bioio_ome_zarr"
+    project_short_description: "A BioIO reader plugin for reading Zarr files in the OME format."
+    hosting_pypi_username: "BrianWhitneyAI"
+    license: "MIT License"
