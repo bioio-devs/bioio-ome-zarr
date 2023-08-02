@@ -5,6 +5,7 @@
 
 A BioIO reader plugin for reading Zarr files in the OME format.
 
+This plugin is intended to be used in conjunction with [bioio](https://github.com/bioio-devs/bioio)
 ---
 
 ## Installation

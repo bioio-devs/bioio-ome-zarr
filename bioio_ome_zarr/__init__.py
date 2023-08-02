@@ -12,7 +12,7 @@ except PackageNotFoundError:
 __author__ = "bioio-devs"
 __email__ = "brian.whitney@alleninstitute.org"
 
-
+from .reader import Reader
 from .reader_metadata import ReaderMetadata
 
-__all__ = ["ReaderMetadata"]
+__all__ = ["Reader", "ReaderMetadata"]
