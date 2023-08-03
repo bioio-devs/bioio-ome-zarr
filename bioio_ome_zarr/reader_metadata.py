@@ -22,7 +22,7 @@ class ReaderMetadata(bioio_base.reader_metadata.ReaderMetadata):
         Return a list of file extensions this plugin supports reading.
         """
         # TODO: figure out how this works with multifile
-        return [".zarr", ".zarr/"]
+        return [".zarr"]
 
     @staticmethod
     def get_reader() -> bioio_base.reader.Reader:

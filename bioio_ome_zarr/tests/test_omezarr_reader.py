@@ -2,8 +2,7 @@ from typing import List, Tuple
 
 import numpy as np
 import pytest
-from bioio_base import dimensions, exceptions
-from bioio_base.test_utilities import run_image_file_checks
+from bioio_base import dimensions, exceptions, test_utilities
 
 from bioio_ome_zarr import Reader
 
@@ -144,7 +143,7 @@ def test_ome_zarr_reader(
     uri = LOCAL_RESOURCES_DIR / filename
 
     # Run checks
-    run_image_file_checks(
+    test_utilities.run_image_file_checks(
         ImageContainer=Reader,
         image=uri,
         set_scene=set_scene,
