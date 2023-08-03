@@ -4,14 +4,12 @@ import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import xarray as xr
-from fsspec.spec import AbstractFileSystem
-
-from bioio_base.dimensions import Dimensions, DimensionNames
-from bioio_base.reader import Reader as BaseReader
-from bioio_base.types import PhysicalPixelSizes, PathLike
 from bioio_base import constants, exceptions
 from bioio_base import io as io_utils
-
+from bioio_base.dimensions import DimensionNames, Dimensions
+from bioio_base.reader import Reader as BaseReader
+from bioio_base.types import PathLike, PhysicalPixelSizes
+from fsspec.spec import AbstractFileSystem
 from ome_zarr.io import parse_url
 from ome_zarr.reader import Reader as ZarrReader
 
@@ -39,6 +37,7 @@ class Reader(BaseReader):
     accept (certain readers may not support buffers for example).
 
     """
+
     _xarray_dask_data: Optional["xr.DataArray"] = None
     _xarray_data: Optional["xr.DataArray"] = None
     _mosaic_xarray_dask_data: Optional["xr.DataArray"] = None
@@ -104,7 +103,6 @@ class Reader(BaseReader):
                 )
         return self._scenes
 
-
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
 
@@ -157,7 +155,7 @@ class Reader(BaseReader):
 
             self._physical_pixel_sizes = PhysicalPixelSizes(z_size, y_size, x_size)
         return self._physical_pixel_sizes
-    
+
     @property
     def channel_names(self) -> Optional[List[str]]:
         if self._channel_names is None:
@@ -169,7 +167,6 @@ class Reader(BaseReader):
             except KeyError:
                 self._channel_names = super().channel_names
         return self._channel_names
-    
 
     @staticmethod
     def _get_coords(
@@ -178,7 +175,6 @@ class Reader(BaseReader):
         scene: str,
         channel_names: Optional[List[str]],
     ) -> Dict[str, Any]:
-
         coords: Dict[str, Any] = {}
 
         # Use dims for coord determination
@@ -198,7 +194,6 @@ class Reader(BaseReader):
     def _get_pixel_size(
         reader: ZarrReader, dims: List[str], series_index: int, resolution_index: int
     ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-
         # OmeZarr file may contain an additional set of "coordinateTransformations"
         # these coefficents are applied to all resolution levels.
         if (

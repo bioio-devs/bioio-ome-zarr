@@ -12,9 +12,10 @@ class ReaderMetadata(bioio_base.reader_metadata.ReaderMetadata):
     """
     Notes
     -----
-    Defines metadata for the reader itself (not the image read), 
+    Defines metadata for the reader itself (not the image read),
     such as supported file extensions.
     """
+
     @staticmethod
     def get_supported_extensions() -> List[str]:
         """

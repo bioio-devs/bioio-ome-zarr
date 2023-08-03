@@ -1,5 +1,6 @@
 from typing import Union
 
+
 def generate_ome_image_id(image_id: Union[str, int]) -> str:
     """
     Naively generates the standard OME image ID using a provided ID.
