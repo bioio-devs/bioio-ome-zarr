@@ -56,7 +56,7 @@ jobs:
     - uses: actions/cache@v2
       id: cache
       with:
-        path: bioio_sldy/tests/resources
+        path: bioio_ome_zarr/tests/resources
         key: ${{ hashFiles('scripts/TEST_RESOURCES_HASH.txt') }}
     - name: Download Test Resources
       if: steps.cache.outputs.cache-hit != 'true'
