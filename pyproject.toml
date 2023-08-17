@@ -28,7 +28,9 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
   "bioio-base>=0.2.0",
+  "fsspec>=2022.8.0",
   "ome-zarr>=0.8.0",
+  "xarray>=0.16.1",
 ]
 
 [project.urls]
