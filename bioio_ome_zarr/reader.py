@@ -51,7 +51,7 @@ class Reader(reader.Reader):
 
     def __init__(
         self,
-        image: dimensions.PathLike,
+        image: types.PathLike,
         fs_kwargs: Dict[str, Any] = {},
     ):
         # Expand details of provided image
