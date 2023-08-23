@@ -4,14 +4,8 @@ import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import xarray as xr
+from bioio_base import constants, dimensions, exceptions, io, reader, types
 from fsspec.spec import AbstractFileSystem
-
-from bioio_base.dimensions import Dimensions, DimensionNames
-from bioio_base.reader import Reader as BaseReader
-from bioio_base.types import PhysicalPixelSizes, PathLike
-from bioio_base import constants, exceptions
-from bioio_base import io as io_utils
-
 from ome_zarr.io import parse_url
 from ome_zarr.reader import Reader as ZarrReader
 
@@ -20,7 +14,7 @@ from . import utils as metadata_utils
 ###############################################################################
 
 
-class Reader(BaseReader):
+class Reader(reader.Reader):
     """
     The main class of each reader plugin. This class is subclass
     of the abstract class reader (BaseReader) in bioio-base.
@@ -39,11 +33,12 @@ class Reader(BaseReader):
     accept (certain readers may not support buffers for example).
 
     """
+
     _xarray_dask_data: Optional["xr.DataArray"] = None
     _xarray_data: Optional["xr.DataArray"] = None
     _mosaic_xarray_dask_data: Optional["xr.DataArray"] = None
     _mosaic_xarray_data: Optional["xr.DataArray"] = None
-    _dims: Optional[Dimensions] = None
+    _dims: Optional[dimensions.Dimensions] = None
     _metadata: Optional[Any] = None
     _scenes: Optional[Tuple[str, ...]] = None
     _current_scene_index: int = 0
@@ -56,11 +51,11 @@ class Reader(BaseReader):
 
     def __init__(
         self,
-        image: PathLike,
+        image: types.PathLike,
         fs_kwargs: Dict[str, Any] = {},
     ):
         # Expand details of provided image
-        self._fs, self._path = io_utils.pathlike_to_fs(
+        self._fs, self._path = io.pathlike_to_fs(
             image,
             enforce_exists=False,
             fs_kwargs=fs_kwargs,
@@ -73,7 +68,7 @@ class Reader(BaseReader):
             )
 
         self._zarr = ZarrReader(parse_url(self._path, mode="r")).zarr
-        self._physical_pixel_sizes: Optional[PhysicalPixelSizes] = None
+        self._physical_pixel_sizes: Optional[types.PhysicalPixelSizes] = None
         self._multiresolution_level = 0
         self._channel_names: Optional[List[str]] = None
 
@@ -103,7 +98,6 @@ class Reader(BaseReader):
                     for i in range(len(self._zarr.root_attrs["multiscales"]))
                 )
         return self._scenes
-
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
@@ -141,7 +135,7 @@ class Reader(BaseReader):
 
     # Optional Methods
     @property
-    def physical_pixel_sizes(self) -> PhysicalPixelSizes:
+    def physical_pixel_sizes(self) -> types.PhysicalPixelSizes:
         """Return the physical pixel sizes of the image."""
         if self._physical_pixel_sizes is None:
             try:
@@ -155,9 +149,11 @@ class Reader(BaseReader):
                 warnings.warn(f"Could not parse zarr pixel size: {e}")
                 z_size, y_size, x_size = None, None, None
 
-            self._physical_pixel_sizes = PhysicalPixelSizes(z_size, y_size, x_size)
+            self._physical_pixel_sizes = types.PhysicalPixelSizes(
+                z_size, y_size, x_size
+            )
         return self._physical_pixel_sizes
-    
+
     @property
     def channel_names(self) -> Optional[List[str]]:
         if self._channel_names is None:
@@ -169,7 +165,6 @@ class Reader(BaseReader):
             except KeyError:
                 self._channel_names = super().channel_names
         return self._channel_names
-    
 
     @staticmethod
     def _get_coords(
@@ -178,19 +173,18 @@ class Reader(BaseReader):
         scene: str,
         channel_names: Optional[List[str]],
     ) -> Dict[str, Any]:
-
         coords: Dict[str, Any] = {}
 
         # Use dims for coord determination
-        if DimensionNames.Channel in dims:
+        if dimensions.DimensionNames.Channel in dims:
             # Generate channel names if no existing channel names
             if channel_names is None:
-                coords[DimensionNames.Channel] = [
+                coords[dimensions.DimensionNames.Channel] = [
                     metadata_utils.generate_ome_channel_id(image_id=scene, channel_id=i)
-                    for i in range(shape[dims.index(DimensionNames.Channel)])
+                    for i in range(shape[dims.index(dimensions.DimensionNames.Channel)])
                 ]
             else:
-                coords[DimensionNames.Channel] = channel_names
+                coords[dimensions.DimensionNames.Channel] = channel_names
 
         return coords
 
@@ -198,7 +192,6 @@ class Reader(BaseReader):
     def _get_pixel_size(
         reader: ZarrReader, dims: List[str], series_index: int, resolution_index: int
     ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-
         # OmeZarr file may contain an additional set of "coordinateTransformations"
         # these coefficents are applied to all resolution levels.
         if (
@@ -218,9 +211,9 @@ class Reader(BaseReader):
         spatial_coeffs = {}
 
         for dim in [
-            DimensionNames.SpatialX,
-            DimensionNames.SpatialY,
-            DimensionNames.SpatialZ,
+            dimensions.DimensionNames.SpatialX,
+            dimensions.DimensionNames.SpatialY,
+            dimensions.DimensionNames.SpatialZ,
         ]:
             if dim in dims:
                 dim_index = dims.index(dim)
@@ -232,7 +225,7 @@ class Reader(BaseReader):
                 spatial_coeffs[dim] = None
 
         return (
-            spatial_coeffs[DimensionNames.SpatialZ],
-            spatial_coeffs[DimensionNames.SpatialY],
-            spatial_coeffs[DimensionNames.SpatialX],
+            spatial_coeffs[dimensions.DimensionNames.SpatialZ],
+            spatial_coeffs[dimensions.DimensionNames.SpatialY],
+            spatial_coeffs[dimensions.DimensionNames.SpatialX],
         )
