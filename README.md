@@ -1,7 +1,7 @@
 # bioio-ome-zarr
 
-[![Build Status](https://github.com/bioio-devs/bioio-ome-zarr/workflows/CI/badge.svg)](https://github.com/bioio-devs/bioio-ome-zarr/actions)
-[![Documentation](https://github.com/bioio-devs/bioio-ome-zarr/workflows/Documentation/badge.svg)](https://bioio-devs.github.io/bioio-ome-zarr)
+[![Build Status](https://github.com/bioio-devs/bioio-ome-zarr/actions/workflows/ci.yml/badge.svg)](https://github.com/bioio-devs/bioio-ome-zarr/actions)
+[![Documentation](https://github.com/bioio-devs/bioio-ome-zarr/actions/workflows/docs.yml/badge.svg)](https://bioio-devs.github.io/bioio-ome-zarr)
 
 A BioIO reader plugin for reading Zarr files in the OME format.
 
