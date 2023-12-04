@@ -66,11 +66,9 @@ Available recipes:
     build                    # run lint and then run tests
     clean                    # clean all build, python, and lint files
     default                  # list all available commands
-    generate-docs            # generate Sphinx HTML documentation
     install                  # install with all deps
     lint                     # lint, format, and check all files
     release                  # release a new version
-    serve-docs               # generate Sphinx HTML documentation and serve to browser
     tag-for-release version  # tag a new version
     test                     # run tests
     update-from-cookiecutter # update this repo using latest cookiecutter-bioio-reader

@@ -68,11 +68,6 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
-docs/_build/
-docs/bioio_ome_zarr.*rst
-docs/modules.rst
-
 # PyBuilder
 target/
 
