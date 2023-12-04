@@ -39,9 +39,20 @@ jobs:
       matrix:
         python-version: [3.9, "3.10", 3.11]
         os: [ubuntu-latest, macOS-latest, windows-latest]
+    env:
+      BUCKET_NAME : "bioio-dev-test-resources"
+      AWS_REGION : "us-west-2"
+    permissions:
+      id-token: write   # This is required for requesting the JWT
+      contents: read    # This is required for actions/checkout
 
     steps:
     - uses: actions/checkout@v4
+    - uses: aws-actions/configure-aws-credentials@v3
+      with:
+        role-to-assume: arn:aws:iam::978220035532:role/bioio_github
+        role-session-name: bioio-lif-${{ github.sha }}
+        aws-region: ${{ env.AWS_REGION }}
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
