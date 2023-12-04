@@ -6,8 +6,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import xarray as xr
 from bioio_base import constants, dimensions, exceptions, io, reader, types
 from fsspec.spec import AbstractFileSystem
+from ome_zarr.format import CurrentFormat
 from ome_zarr.io import parse_url
-from ome_zarr.reader import Reader as ZarrReader
+from ome_zarr.reader import Multiscales, Reader as ZarrReader
 
 from . import utils as metadata_utils
 
@@ -101,7 +102,7 @@ class Reader(reader.Reader):
     @property
     def resolution_levels(self) -> Tuple[int, ...]:
         return tuple(
-            range(len(self._zarr.root_attrs["multiscales"][self.current_scene_index]))
+            self._zarr.root_attrs["multiscales"][self.current_scene_index]["datasets"]
         )
 
     def _read_delayed(self) -> xr.DataArray:
@@ -111,7 +112,7 @@ class Reader(reader.Reader):
         return self._xarr_format(delayed=False)
 
     def _xarr_format(self, delayed: bool) -> xr.DataArray:
-        image_data = self._zarr.load(str(self.current_scene_index)).array(resolution=str(self.current_resolution_level))
+        image_data = self._zarr.load(Multiscales).array(resolution="0", version=CurrentFormat().version)
 
         axes = self._zarr.root_attrs["multiscales"][self.current_scene_index].get(
             "axes"
@@ -163,15 +164,15 @@ class Reader(reader.Reader):
         # these coefficents are applied to all resolution levels.
         if (
             "coordinateTransformations"
-            in reader.root_attrs["multiscales"][self.current_scene_index]
+            in self._zarr.root_attrs["multiscales"][self.current_scene_index]
         ):
-            universal_res_consts = reader.root_attrs["multiscales"][self.current_scene_index][
+            universal_res_consts = self._zarr.root_attrs["multiscales"][self.current_scene_index][
                 "coordinateTransformations"
             ][0]["scale"]
         else:
             universal_res_consts = [1.0 for _ in range(len(dims))]
 
-        coord_transform = reader.root_attrs["multiscales"][self.current_scene_index]["datasets"][
+        coord_transform = self._zarr.root_attrs["multiscales"][self.current_scene_index]["datasets"][
             self.current_resolution_level
         ]["coordinateTransformations"]
 

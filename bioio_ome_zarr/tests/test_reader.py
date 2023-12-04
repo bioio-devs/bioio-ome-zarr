@@ -156,3 +156,21 @@ def test_ome_zarr_reader(
         expected_physical_pixel_sizes=expected_physical_pixel_sizes,
         expected_metadata_type=dict,
     )
+
+@pytest.mark.parametrize(
+        "filename, "
+        "expected_resolution_levels",
+        [
+            ("s1_t1_c1_z1_Image_0.zarr", (0, 1, 2)),
+        ]
+)
+def test_ome_zarr_reader_resolution_levels(
+        filename: str,
+        expected_resolution_levels: Tuple[int, ...],
+) -> None:
+    # Construct full filepath
+    uri = LOCAL_RESOURCES_DIR / filename
+
+    reader = Reader(uri)
+
+    assert reader.resolution_levels == expected_resolution_levels
