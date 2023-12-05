@@ -6,9 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import xarray as xr
 from bioio_base import constants, dimensions, exceptions, io, reader, types
 from fsspec.spec import AbstractFileSystem
-from ome_zarr.format import CurrentFormat
 from ome_zarr.io import parse_url
-from ome_zarr.reader import Multiscales, Reader as ZarrReader
+from ome_zarr.reader import Reader as ZarrReader
 
 from . import utils as metadata_utils
 
@@ -101,9 +100,15 @@ class Reader(reader.Reader):
 
     @property
     def resolution_levels(self) -> Tuple[int, ...]:
-        return tuple(
-            self._zarr.root_attrs["multiscales"][self.current_scene_index]["datasets"]
-        )
+        """
+        Returns
+        -------
+        resolution_levels: Tuple[str, ...]
+            Return the available resolution levels for the current scene.
+            By default these are ordered from highest resolution to lowest
+            resolution.
+        """
+        return tuple(rl for rl in range(len(self._zarr.root_attrs["multiscales"][self.current_scene_index]["datasets"])))
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
@@ -112,7 +117,8 @@ class Reader(reader.Reader):
         return self._xarr_format(delayed=False)
 
     def _xarr_format(self, delayed: bool) -> xr.DataArray:
-        image_data = self._zarr.load(Multiscales).array(resolution="0", version=CurrentFormat().version)
+        data_path = self._zarr.root_attrs["multiscales"][self.current_scene_index]["datasets"][self.current_resolution_level]["path"]
+        image_data = self._zarr.load(data_path)
 
         axes = self._zarr.root_attrs["multiscales"][self.current_scene_index].get(
             "axes"
