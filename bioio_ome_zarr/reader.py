@@ -69,7 +69,6 @@ class Reader(reader.Reader):
 
         self._zarr = ZarrReader(parse_url(self._path, mode="r")).zarr
         self._physical_pixel_sizes: Optional[types.PhysicalPixelSizes] = None
-        self._multiresolution_level = 0
         self._channel_names: Optional[List[str]] = None
 
     @staticmethod
@@ -99,6 +98,27 @@ class Reader(reader.Reader):
                 )
         return self._scenes
 
+    @property
+    def resolution_levels(self) -> Tuple[int, ...]:
+        """
+        Returns
+        -------
+        resolution_levels: Tuple[str, ...]
+            Return the available resolution levels for the current scene.
+            By default these are ordered from highest resolution to lowest
+            resolution.
+        """
+        return tuple(
+            rl
+            for rl in range(
+                len(
+                    self._zarr.root_attrs["multiscales"][self.current_scene_index][
+                        "datasets"
+                    ]
+                )
+            )
+        )
+
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
 
@@ -106,7 +126,10 @@ class Reader(reader.Reader):
         return self._xarr_format(delayed=False)
 
     def _xarr_format(self, delayed: bool) -> xr.DataArray:
-        image_data = self._zarr.load(str(self.current_scene_index))
+        data_path = self._zarr.root_attrs["multiscales"][self.current_scene_index][
+            "datasets"
+        ][self.current_resolution_level]["path"]
+        image_data = self._zarr.load(data_path)
 
         axes = self._zarr.root_attrs["multiscales"][self.current_scene_index].get(
             "axes"
@@ -139,11 +162,8 @@ class Reader(reader.Reader):
         """Return the physical pixel sizes of the image."""
         if self._physical_pixel_sizes is None:
             try:
-                z_size, y_size, x_size = Reader._get_pixel_size(
-                    self._zarr,
+                z_size, y_size, x_size = self._get_pixel_size(
                     list(self.dims.order),
-                    self._current_scene_index,
-                    self._multiresolution_level,
                 )
             except Exception as e:
                 warnings.warn(f"Could not parse zarr pixel size: {e}")
@@ -153,6 +173,48 @@ class Reader(reader.Reader):
                 z_size, y_size, x_size
             )
         return self._physical_pixel_sizes
+
+    def _get_pixel_size(
+        self,
+        dims: List[str],
+    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        # OmeZarr file may contain an additional set of "coordinateTransformations"
+        # these coefficents are applied to all resolution levels.
+        if (
+            "coordinateTransformations"
+            in self._zarr.root_attrs["multiscales"][self.current_scene_index]
+        ):
+            universal_res_consts = self._zarr.root_attrs["multiscales"][
+                self.current_scene_index
+            ]["coordinateTransformations"][0]["scale"]
+        else:
+            universal_res_consts = [1.0 for _ in range(len(dims))]
+
+        coord_transform = self._zarr.root_attrs["multiscales"][
+            self.current_scene_index
+        ]["datasets"][self.current_resolution_level]["coordinateTransformations"]
+
+        spatial_coeffs = {}
+
+        for dim in [
+            dimensions.DimensionNames.SpatialX,
+            dimensions.DimensionNames.SpatialY,
+            dimensions.DimensionNames.SpatialZ,
+        ]:
+            if dim in dims:
+                dim_index = dims.index(dim)
+                spatial_coeffs[dim] = (
+                    coord_transform[0]["scale"][dim_index]
+                    * universal_res_consts[dim_index]
+                )
+            else:
+                spatial_coeffs[dim] = None
+
+        return (
+            spatial_coeffs[dimensions.DimensionNames.SpatialZ],
+            spatial_coeffs[dimensions.DimensionNames.SpatialY],
+            spatial_coeffs[dimensions.DimensionNames.SpatialX],
+        )
 
     @property
     def channel_names(self) -> Optional[List[str]]:
@@ -187,45 +249,3 @@ class Reader(reader.Reader):
                 coords[dimensions.DimensionNames.Channel] = channel_names
 
         return coords
-
-    @staticmethod
-    def _get_pixel_size(
-        reader: ZarrReader, dims: List[str], series_index: int, resolution_index: int
-    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-        # OmeZarr file may contain an additional set of "coordinateTransformations"
-        # these coefficents are applied to all resolution levels.
-        if (
-            "coordinateTransformations"
-            in reader.root_attrs["multiscales"][series_index]
-        ):
-            universal_res_consts = reader.root_attrs["multiscales"][series_index][
-                "coordinateTransformations"
-            ][0]["scale"]
-        else:
-            universal_res_consts = [1.0 for _ in range(len(dims))]
-
-        coord_transform = reader.root_attrs["multiscales"][series_index]["datasets"][
-            resolution_index
-        ]["coordinateTransformations"]
-
-        spatial_coeffs = {}
-
-        for dim in [
-            dimensions.DimensionNames.SpatialX,
-            dimensions.DimensionNames.SpatialY,
-            dimensions.DimensionNames.SpatialZ,
-        ]:
-            if dim in dims:
-                dim_index = dims.index(dim)
-                spatial_coeffs[dim] = (
-                    coord_transform[0]["scale"][dim_index]
-                    * universal_res_consts[dim_index]
-                )
-            else:
-                spatial_coeffs[dim] = None
-
-        return (
-            spatial_coeffs[dimensions.DimensionNames.SpatialZ],
-            spatial_coeffs[dimensions.DimensionNames.SpatialY],
-            spatial_coeffs[dimensions.DimensionNames.SpatialX],
-        )
