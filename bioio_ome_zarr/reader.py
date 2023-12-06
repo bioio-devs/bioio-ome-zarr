@@ -108,7 +108,16 @@ class Reader(reader.Reader):
             By default these are ordered from highest resolution to lowest
             resolution.
         """
-        return tuple(rl for rl in range(len(self._zarr.root_attrs["multiscales"][self.current_scene_index]["datasets"])))
+        return tuple(
+            rl
+            for rl in range(
+                len(
+                    self._zarr.root_attrs["multiscales"][self.current_scene_index][
+                        "datasets"
+                    ]
+                )
+            )
+        )
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
@@ -117,7 +126,9 @@ class Reader(reader.Reader):
         return self._xarr_format(delayed=False)
 
     def _xarr_format(self, delayed: bool) -> xr.DataArray:
-        data_path = self._zarr.root_attrs["multiscales"][self.current_scene_index]["datasets"][self.current_resolution_level]["path"]
+        data_path = self._zarr.root_attrs["multiscales"][self.current_scene_index][
+            "datasets"
+        ][self.current_resolution_level]["path"]
         image_data = self._zarr.load(data_path)
 
         axes = self._zarr.root_attrs["multiscales"][self.current_scene_index].get(
@@ -164,7 +175,8 @@ class Reader(reader.Reader):
         return self._physical_pixel_sizes
 
     def _get_pixel_size(
-        self, dims: List[str],
+        self,
+        dims: List[str],
     ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         # OmeZarr file may contain an additional set of "coordinateTransformations"
         # these coefficents are applied to all resolution levels.
@@ -172,15 +184,15 @@ class Reader(reader.Reader):
             "coordinateTransformations"
             in self._zarr.root_attrs["multiscales"][self.current_scene_index]
         ):
-            universal_res_consts = self._zarr.root_attrs["multiscales"][self.current_scene_index][
-                "coordinateTransformations"
-            ][0]["scale"]
+            universal_res_consts = self._zarr.root_attrs["multiscales"][
+                self.current_scene_index
+            ]["coordinateTransformations"][0]["scale"]
         else:
             universal_res_consts = [1.0 for _ in range(len(dims))]
 
-        coord_transform = self._zarr.root_attrs["multiscales"][self.current_scene_index]["datasets"][
-            self.current_resolution_level
-        ]["coordinateTransformations"]
+        coord_transform = self._zarr.root_attrs["multiscales"][
+            self.current_scene_index
+        ]["datasets"][self.current_resolution_level]["coordinateTransformations"]
 
         spatial_coeffs = {}
 
