@@ -48,7 +48,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - uses: aws-actions/configure-aws-credentials@v3
+    - uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: arn:aws:iam::978220035532:role/bioio_github
         role-session-name: bioio-lif-${{ github.sha }}
