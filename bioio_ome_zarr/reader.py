@@ -55,11 +55,14 @@ class Reader(reader.Reader):
         fs_kwargs: Dict[str, Any] = {},
     ):
         # Expand details of provided image
-        self._fs, self._path = io.pathlike_to_fs(
+        self._fs, _ = io.pathlike_to_fs(
             image,
             enforce_exists=False,
             fs_kwargs=fs_kwargs,
         )
+        # pathlike_to_fs returns a file-system-specific path, but ZarrReader expects a
+        # fully-qualified path.
+        self._path = str(image)
 
         # Enforce valid image
         if not self._is_supported_image(self._fs, self._path):
