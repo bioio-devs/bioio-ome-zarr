@@ -53,7 +53,9 @@ class Reader(reader.Reader):
         # Enforce valid image
         if not self._is_supported_image(None, self._path):
             raise exceptions.UnsupportedFileFormatError(
-                self.__class__.__name__, self._path
+                self.__class__.__name__,
+                self._path,
+                "Could not find a .zgroup or .zarray file at the provided path.",
             )
 
         self._zarr = ZarrReader(parse_url(self._path, mode="r")).zarr
