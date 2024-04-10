@@ -21,17 +21,10 @@ class Reader(reader.Reader):
 
     Parameters
     ----------
-    image: Any
-        Some type of object to read and follow the Reader specification.
+    image: types.PathLike
+        String or Path to the ZARR root
     fs_kwargs: Dict[str, Any]
-        Any specific keyword arguments to pass down to the fsspec created filesystem.
-        Default: {}
-
-    Notes
-    -----
-    It is up to the implementer of the Reader to decide which types they would like to
-    accept (certain readers may not support buffers for example).
-
+        Ignored
     """
 
     _xarray_dask_data: Optional["xr.DataArray"] = None
