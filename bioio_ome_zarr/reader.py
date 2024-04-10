@@ -4,7 +4,7 @@ import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import xarray as xr
-from bioio_base import constants, dimensions, exceptions, io, reader, types
+from bioio_base import constants, dimensions, exceptions, reader, types
 from fsspec.spec import AbstractFileSystem
 from ome_zarr.io import parse_url
 from ome_zarr.reader import Reader as ZarrReader
@@ -44,7 +44,6 @@ class Reader(reader.Reader):
     _current_scene_index: int = 0
     # Do not provide default value because
     # they may not need to be used by your reader (i.e. input param is an array)
-    _fs: "AbstractFileSystem"
     _path: str
 
     # Required Methods
@@ -54,18 +53,12 @@ class Reader(reader.Reader):
         image: types.PathLike,
         fs_kwargs: Dict[str, Any] = {},
     ):
-        # Expand details of provided image
-        self._fs, _ = io.pathlike_to_fs(
-            image,
-            enforce_exists=False,
-            fs_kwargs=fs_kwargs,
-        )
         # pathlike_to_fs returns a file-system-specific path, but ZarrReader expects a
         # fully-qualified path.
         self._path = str(image)
 
         # Enforce valid image
-        if not self._is_supported_image(self._fs, self._path):
+        if not self._is_supported_image(None, self._path):
             raise exceptions.UnsupportedFileFormatError(
                 self.__class__.__name__, self._path
             )
