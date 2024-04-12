@@ -62,14 +62,14 @@ class Reader(reader.Reader):
                 "Could not find a .zgroup or .zarray file at the provided path.",
             )
 
-        self._zarr = ZarrReader(parse_url(self._path, mode="r")).zarr
+        self._zarr = get_zarr_reader(self._fs, self._path).zarr
         self._physical_pixel_sizes: Optional[types.PhysicalPixelSizes] = None
         self._channel_names: Optional[List[str]] = None
 
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
         try:
-            ZarrReader(parse_url(path, mode="r"))
+            get_zarr_reader(fs, path)
             return True
 
         except AttributeError:
@@ -244,3 +244,7 @@ class Reader(reader.Reader):
                 coords[dimensions.DimensionNames.Channel] = channel_names
 
         return coords
+
+
+def get_zarr_reader(fs: AbstractFileSystem, path: str) -> ZarrReader:
+    return ZarrReader(parse_url(fs.unstrip_protocol(path), mode="r"))
