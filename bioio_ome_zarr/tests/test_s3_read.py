@@ -6,7 +6,9 @@ from bioio_ome_zarr import Reader
 def test_ome_zarr_reader() -> None:
     # ARRANGE
     uri = (
-        "s3://allencell/aics/nuc_morph_data"
+        # Cannot use s3:// URL due to ome-zarr issue #369
+        # "s3://allencell/aics/nuc_morph_data"
+        "https://allencell.s3.amazonaws.com/aics/nuc_morph_data"
         "/data_for_analysis/baseline_colonies/20200323_09_small/raw.ome.zarr"
     )
     scene = "/"
