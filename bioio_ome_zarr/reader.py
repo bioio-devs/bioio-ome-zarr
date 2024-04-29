@@ -96,9 +96,9 @@ class Reader(reader.Reader):
             except AttributeError:
                 return False
         else:
-            return reader.Reader.is_supported_image(cls, image,
-                                                    fs_kwargs=fs_kwargs,
-                                                    **kwargs)
+            return reader.Reader.is_supported_image(
+                cls, image, fs_kwargs=fs_kwargs, **kwargs
+            )
 
     @property
     def scenes(self) -> Tuple[str, ...]:
