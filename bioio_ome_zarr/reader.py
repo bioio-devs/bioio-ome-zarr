@@ -84,7 +84,7 @@ class Reader(reader.Reader):
         **kwargs: Any,
     ) -> bool:
         if isinstance(image, (str, Path)):
-            return cls._is_supported_image(None, image)
+            return cls._is_supported_image(None, str(image), **kwargs)
         else:
             return reader.Reader.is_supported_image(
                 cls, image, fs_kwargs=fs_kwargs, **kwargs
