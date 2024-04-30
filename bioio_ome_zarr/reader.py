@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import warnings
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import xarray as xr
@@ -74,6 +75,25 @@ class Reader(reader.Reader):
 
         except AttributeError:
             return False
+
+    @classmethod
+    def is_supported_image(
+        cls,
+        image: types.ImageLike,
+        fs_kwargs: Dict[str, Any] = {},
+        **kwargs: Any,
+    ) -> bool:
+        if isinstance(image, (str, Path)):
+            try:
+                ZarrReader(parse_url(image, mode="r"))
+                return True
+
+            except AttributeError:
+                return False
+        else:
+            return reader.Reader.is_supported_image(
+                cls, image, fs_kwargs=fs_kwargs, **kwargs
+            )
 
     @property
     def scenes(self) -> Tuple[str, ...]:
