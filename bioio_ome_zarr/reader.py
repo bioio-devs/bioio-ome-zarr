@@ -84,12 +84,7 @@ class Reader(reader.Reader):
         **kwargs: Any,
     ) -> bool:
         if isinstance(image, (str, Path)):
-            try:
-                ZarrReader(parse_url(image, mode="r"))
-                return True
-
-            except AttributeError:
-                return False
+            return cls._is_supported_image(None, image)
         else:
             return reader.Reader.is_supported_image(
                 cls, image, fs_kwargs=fs_kwargs, **kwargs
@@ -267,4 +262,6 @@ class Reader(reader.Reader):
 
 
 def get_zarr_reader(fs: AbstractFileSystem, path: str) -> ZarrReader:
-    return ZarrReader(parse_url(fs.unstrip_protocol(path), mode="r"))
+    if fs is not None:
+        path = fs.unstrip_protocol(path)
+    return ZarrReader(parse_url(path, mode="r"))
