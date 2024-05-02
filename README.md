@@ -41,6 +41,15 @@ img = BioImage("my_file.zarr", reader=bioio_ome_zarr.Reader)
 img.data
 ```
 
+### Reading from AWS S3
+To read from private S3 buckets or public buckets using `s3://` paths, [credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) must be configured. Public buckets can be accessed without credentials by using the `https://` path.
+```python
+from bioio import BioImage
+path = "https://allencell.s3.amazonaws.com/aics/nuc_morph_data/data_for_analysis/baseline_colonies/20200323_09_small/raw.ome.zarr"
+image = BioImage(path)
+print(image.get_image_dask_data())
+```
+
 ## Issues
 [_Click here to view all open issues in bioio-devs organization at once_](https://github.com/search?q=user%3Abioio-devs+is%3Aissue+is%3Aopen&type=issues&ref=advsearch) or check this repository's issue tab.
 

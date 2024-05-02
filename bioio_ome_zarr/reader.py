@@ -22,17 +22,10 @@ class Reader(reader.Reader):
 
     Parameters
     ----------
-    image: Any
-        Some type of object to read and follow the Reader specification.
+    image: types.PathLike
+        String or Path to the ZARR root
     fs_kwargs: Dict[str, Any]
-        Any specific keyword arguments to pass down to the fsspec created filesystem.
-        Default: {}
-
-    Notes
-    -----
-    It is up to the implementer of the Reader to decide which types they would like to
-    accept (certain readers may not support buffers for example).
-
+        Ignored
     """
 
     _xarray_dask_data: Optional["xr.DataArray"] = None
@@ -65,17 +58,19 @@ class Reader(reader.Reader):
         # Enforce valid image
         if not self._is_supported_image(self._fs, self._path):
             raise exceptions.UnsupportedFileFormatError(
-                self.__class__.__name__, self._path
+                self.__class__.__name__,
+                self._path,
+                "Could not find a .zgroup or .zarray file at the provided path.",
             )
 
-        self._zarr = ZarrReader(parse_url(self._path, mode="r")).zarr
+        self._zarr = get_zarr_reader(self._fs, self._path).zarr
         self._physical_pixel_sizes: Optional[types.PhysicalPixelSizes] = None
         self._channel_names: Optional[List[str]] = None
 
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
         try:
-            ZarrReader(parse_url(path, mode="r"))
+            get_zarr_reader(fs, path)
             return True
 
         except AttributeError:
@@ -89,12 +84,7 @@ class Reader(reader.Reader):
         **kwargs: Any,
     ) -> bool:
         if isinstance(image, (str, Path)):
-            try:
-                ZarrReader(parse_url(image, mode="r"))
-                return True
-
-            except AttributeError:
-                return False
+            return cls._is_supported_image(None, str(image), **kwargs)
         else:
             return reader.Reader.is_supported_image(
                 cls, image, fs_kwargs=fs_kwargs, **kwargs
@@ -269,3 +259,9 @@ class Reader(reader.Reader):
                 coords[dimensions.DimensionNames.Channel] = channel_names
 
         return coords
+
+
+def get_zarr_reader(fs: AbstractFileSystem, path: str) -> ZarrReader:
+    if fs is not None:
+        path = fs.unstrip_protocol(path)
+    return ZarrReader(parse_url(path, mode="r"))
