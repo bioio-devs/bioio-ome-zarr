@@ -12,7 +12,6 @@ from ome_zarr.reader import Reader as ZarrReader
 
 from . import utils as metadata_utils
 
-
 ###############################################################################
 
 
@@ -45,9 +44,9 @@ class Reader(reader.Reader):
     # Required Methods
 
     def __init__(
-            self,
-            image: types.PathLike,
-            fs_kwargs: Dict[str, Any] = {},
+        self,
+        image: types.PathLike,
+        fs_kwargs: Dict[str, Any] = {},
     ):
         # Expand details of provided image
         self._fs, self._path = io.pathlike_to_fs(
@@ -79,10 +78,10 @@ class Reader(reader.Reader):
 
     @classmethod
     def is_supported_image(
-            cls,
-            image: types.ImageLike,
-            fs_kwargs: Dict[str, Any] = {},
-            **kwargs: Any,
+        cls,
+        image: types.ImageLike,
+        fs_kwargs: Dict[str, Any] = {},
+        **kwargs: Any,
     ) -> bool:
         if isinstance(image, (str, Path)):
             return cls._is_supported_image(None, str(image), **kwargs)
@@ -99,7 +98,7 @@ class Reader(reader.Reader):
             # if (each scene has a name) and (that name is unique) use name.
             # otherwise generate scene names.
             if all("name" in scene for scene in scenes) and (
-                    len({scene["name"] for scene in scenes}) == len(scenes)
+                len({scene["name"] for scene in scenes}) == len(scenes)
             ):
                 self._scenes = tuple(str(scene["name"]) for scene in scenes)
             else:
@@ -186,14 +185,14 @@ class Reader(reader.Reader):
         return self._physical_pixel_sizes
 
     def _get_pixel_size(
-            self,
-            dims: List[str],
+        self,
+        dims: List[str],
     ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         # OmeZarr file may contain an additional set of "coordinateTransformations"
         # these coefficents are applied to all resolution levels.
         if (
-                "coordinateTransformations"
-                in self._zarr.root_attrs["multiscales"][self.current_scene_index]
+            "coordinateTransformations"
+            in self._zarr.root_attrs["multiscales"][self.current_scene_index]
         ):
             universal_res_consts = self._zarr.root_attrs["multiscales"][
                 self.current_scene_index
@@ -215,8 +214,8 @@ class Reader(reader.Reader):
             if dim in dims:
                 dim_index = dims.index(dim)
                 spatial_coeffs[dim] = (
-                        coord_transform[0]["scale"][dim_index]
-                        * universal_res_consts[dim_index]
+                    coord_transform[0]["scale"][dim_index]
+                    * universal_res_consts[dim_index]
                 )
             else:
                 spatial_coeffs[dim] = None
@@ -230,19 +229,22 @@ class Reader(reader.Reader):
     @property
     def channel_names(self) -> Optional[List[str]]:
         if self._channel_names is None:
-            if "omero" in self._zarr.root_attrs:
-                self._channel_names = [
-                    str(channel["label"])
-                    for channel in self._zarr.root_attrs["omero"]["channels"]
-                ]
+            try:
+                if "omero" in self._zarr.root_attrs:
+                    self._channel_names = [
+                        str(channel["label"])
+                        for channel in self._zarr.root_attrs["omero"]["channels"]
+                    ]
+            except KeyError:
+                pass
         return self._channel_names
 
     @staticmethod
     def _get_coords(
-            dims: List[str],
-            shape: Tuple[int, ...],
-            scene: str,
-            channel_names: Optional[List[str]],
+        dims: List[str],
+        shape: Tuple[int, ...],
+        scene: str,
+        channel_names: Optional[List[str]],
     ) -> Dict[str, Any]:
         coords: Dict[str, Any] = {}
 
