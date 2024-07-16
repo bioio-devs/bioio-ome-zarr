@@ -36,7 +36,7 @@ class Reader(reader.Reader):
     _metadata: Optional[Any] = None
     _scenes: Optional[Tuple[str, ...]] = None
     _current_scene_index: int = 0
-    _resolution_level_dict: Optional[Dict[int, Tuple[int]]] = None
+    _resolution_level_dict: Optional[Dict[int, Tuple[int, ...]]] = None
     # Do not provide default value because
     # they may not need to be used by your reader (i.e. input param is an array)
     _fs: "AbstractFileSystem"
@@ -131,11 +131,11 @@ class Reader(reader.Reader):
         )
 
     @property
-    def resolution_level_dims(self) -> Dict[int, Tuple[int]]:
+    def resolution_level_dims(self) -> Dict[int, Tuple[int, ...]]:
         """
         Returns
         -------
-        resolution_level_dims: Dict[int, Tuple[int]]
+        resolution_level_dims: Dict[int, Tuple[int, ...]]
             resolution level dictionary of shapes.
         """
         if self._resolution_level_dict is None:
