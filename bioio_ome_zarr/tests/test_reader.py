@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pytest
@@ -39,33 +39,59 @@ from .conftest import LOCAL_RESOURCES_DIR
             "s1_t1_c1_z1_Image_0.zarr",
             "s1_t1_c1_z1",
             ("s1_t1_c1_z1",),
-            2,
+            0,
             (0, 1, 2, 3),
             (1, 1, 1, 7548, 7549),
             np.uint8,
             dimensions.DEFAULT_DIMENSION_ORDER,
             ["Channel:0:0"],
-            (1.0, 1058.3333333333333, 1058.3333333333333),
+            (1.0, 264.5833333333333, 264.5833333333333),
+        ),
+        # General Zarr Lower Resolution
+        (
+            "s1_t1_c1_z1_Image_0.zarr",
+            "s1_t1_c1_z1",
+            ("s1_t1_c1_z1",),
+            1,
+            (0, 1, 2, 3),
+            (1, 1, 1, 3774, 3774),
+            np.uint8,
+            dimensions.DEFAULT_DIMENSION_ORDER,
+            ["Channel:0:0"],
+            (1.0, 529.1666666666666, 529.1666666666666),
         ),
         # Complex General Zarr
         (
             "s1_t7_c4_z3_Image_0.zarr",
             "s1_t7_c4_z3_Image_0",
             ("s1_t7_c4_z3_Image_0",),
-            3,
+            0,
             (0, 1, 2, 3),
             (7, 4, 3, 1200, 1800),
             np.uint16,
             dimensions.DEFAULT_DIMENSION_ORDER,
             ["C:0", "C:1", "C:2", "C:3"],
-            (1.0, 8.0, 8.0),
+            (1.0, 1.0, 1.0),
+        ),
+        # Complex General Zarr Lower Resolution
+        (
+            "s1_t7_c4_z3_Image_0.zarr",
+            "s1_t7_c4_z3_Image_0",
+            ("s1_t7_c4_z3_Image_0",),
+            1,
+            (0, 1, 2, 3),
+            (7, 4, 3, 600, 900),
+            np.uint16,
+            dimensions.DEFAULT_DIMENSION_ORDER,
+            ["C:0", "C:1", "C:2", "C:3"],
+            (1.0, 2.0, 2.0),
         ),
         # Test Resolution Constant
         (
             "resolution_constant_zyx.zarr",
             "resolution_constant_zyx",
             ("resolution_constant_zyx",),
-            2,
+            0,
             (0, 1, 2, 3),
             (2, 4, 4),
             np.int64,
@@ -75,14 +101,14 @@ from .conftest import LOCAL_RESOURCES_DIR
                 + dimensions.DimensionNames.SpatialX
             ),
             ["Channel:0"],
-            (0.1, 0.4, 0.4),
+            (0.1, 0.1, 0.1),
         ),
         # Test TYX
         (
             "dimension_handling_tyx.zarr",
             "dimension_handling_tyx",
             ("dimension_handling_tyx",),
-            1,
+            0,
             (0, 1, 2, 3),
             (2, 4, 4),
             np.int64,
@@ -92,14 +118,14 @@ from .conftest import LOCAL_RESOURCES_DIR
                 + dimensions.DimensionNames.SpatialX
             ),
             ["Channel:0"],
-            (None, 2.0, 2.0),
+            (None, 1.0, 1.0),
         ),
         # Test ZYX
         (
             "dimension_handling_zyx.zarr",
             "dimension_handling_zyx",
             ("dimension_handling_zyx",),
-            1,
+            0,
             (0, 1, 2, 3),
             (2, 4, 4),
             np.int64,
@@ -109,7 +135,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 + dimensions.DimensionNames.SpatialX
             ),
             ["Channel:0"],
-            (1.0, 2.0, 2.0),
+            (1.0, 1.0, 1.0),
         ),
         # Test TZYX
         (
@@ -135,7 +161,7 @@ from .conftest import LOCAL_RESOURCES_DIR
             ("absent_metadata_dims_zyx",),
             3,
             (0, 1, 2, 3),
-            (2, 4, 4),
+            (2, 0, 0),
             np.int64,
             (
                 dimensions.DimensionNames.SpatialZ
@@ -179,3 +205,31 @@ def test_ome_zarr_reader(
         expected_physical_pixel_sizes=expected_physical_pixel_sizes,
         expected_metadata_type=dict,
     )
+
+
+cloud_path = (
+    "https://animatedcell-test-data.s3.us-west-2.amazonaws.com/variance/35.zarr"
+)
+
+
+@pytest.mark.parametrize(
+    "path, expected_resolution_level_dims",
+    [
+        (
+            cloud_path,
+            {
+                0: (1, 9, 67, 624, 924),
+                1: (1, 9, 67, 312, 462),
+                2: (1, 9, 67, 156, 231),
+            },
+        )
+    ],
+)
+def test_resolution_level_dims(
+    path: str, expected_resolution_level_dims: Dict[int, Tuple[int]]
+) -> None:
+    # Arrange/Act
+    image = Reader(path)
+
+    # Assert
+    assert image.resolution_level_dims == expected_resolution_level_dims

@@ -36,6 +36,7 @@ class Reader(reader.Reader):
     _metadata: Optional[Any] = None
     _scenes: Optional[Tuple[str, ...]] = None
     _current_scene_index: int = 0
+    _resolution_level_dict: Optional[Dict[int, Tuple[int]]] = None
     # Do not provide default value because
     # they may not need to be used by your reader (i.e. input param is an array)
     _fs: "AbstractFileSystem"
@@ -128,6 +129,26 @@ class Reader(reader.Reader):
                 )
             )
         )
+
+    @property
+    def resolution_level_dims(self) -> Dict[int, Tuple[int]]:
+        """
+        Returns
+        -------
+        resolution_level_dims: Dict[int, Tuple[int]]
+            resolution level dictionary of shapes.
+        """
+        if self._resolution_level_dict is None:
+            initial_resoluiton_level = self.current_resolution_level
+            resolution_level_dict = {}
+
+            for level in self.resolution_levels:
+                self.set_resolution_level(level)
+                resolution_level_dict[level] = self.shape
+            self._resolution_level_dict = resolution_level_dict
+            self.set_resolution_level(initial_resoluiton_level)
+
+        return self._resolution_level_dict
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
