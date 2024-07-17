@@ -263,6 +263,4 @@ class Reader(reader.Reader):
 
 
 def get_zarr_reader(fs: AbstractFileSystem, path: str) -> ZarrReader:
-    if fs is not None:
-        return ZarrReader(ZarrLocation(zarr.storage.FSStore(url=path, fs=fs)))
-    return ZarrReader(parse_url(path, mode="r"))
+    return ZarrReader(ZarrLocation(zarr.storage.FSStore(url=path, fs=fs)))
