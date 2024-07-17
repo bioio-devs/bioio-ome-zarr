@@ -5,13 +5,13 @@ from bioio_ome_zarr import Reader
 
 
 @pytest.mark.parametrize(
-    "prefix",
+    ["prefix", "fs_kwargs"],
     [
-        "s3://allencell/aics/nuc_morph_data",
-        "https://allencell.s3.amazonaws.com/aics/",
+        ["s3://allencell/aics/", dict(anon=True)],
+        ["https://allencell.s3.amazonaws.com/aics/", dict()],
     ],
 )
-def test_ome_zarr_reader(prefix) -> None:
+def test_ome_zarr_reader(prefix, fs_kwargs) -> None:
     # ARRANGE
     uri = (
         prefix + "nuc-morph-dataset"
@@ -23,7 +23,7 @@ def test_ome_zarr_reader(prefix) -> None:
     resolution_level = 0
 
     # ACT
-    image_container = Reader(uri, fs_kwargs=dict(anon=True))
+    image_container = Reader(uri, fs_kwargs=fs_kwargs)
     image_container.set_scene(scene)
     image_container.set_resolution_level(resolution_level)
 
