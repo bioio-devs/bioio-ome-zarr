@@ -207,29 +207,31 @@ def test_ome_zarr_reader(
     )
 
 
-cloud_path = (
-    "https://animatedcell-test-data.s3.us-west-2.amazonaws.com/variance/35.zarr"
-)
-
-
 @pytest.mark.parametrize(
-    "path, expected_resolution_level_dims",
+    ["uri", "expected_resolution_level_dims"],
     [
-        (
-            cloud_path,
+        [
+            (
+                "https://allencell.s3.amazonaws.com/aics/nuc-morph-dataset/"
+                "hipsc_fov_nuclei_timelapse_dataset/"
+                "hipsc_fov_nuclei_timelapse_data_used_for_analysis/"
+                "baseline_colonies_fov_timelapse_dataset/20200323_09_small/"
+                "raw.ome.zarr/"
+            ),
             {
-                0: (1, 9, 67, 624, 924),
-                1: (1, 9, 67, 312, 462),
-                2: (1, 9, 67, 156, 231),
+                0: (570, 2, 42, 1248, 1824),
+                1: (570, 2, 42, 624, 912),
+                2: (570, 2, 42, 312, 456),
+                3: (570, 2, 42, 156, 228),
+                4: (570, 2, 42, 78, 114),
             },
-        )
+        ],
     ],
 )
 def test_resolution_level_dims(
-    path: str, expected_resolution_level_dims: Dict[int, Tuple[int]]
+    uri: str, expected_resolution_level_dims: Dict[int, Tuple[int]]
 ) -> None:
-    # Arrange/Act
-    image = Reader(path)
-
+    # Act
+    image_container = Reader(uri)
     # Assert
-    assert image.resolution_level_dims == expected_resolution_level_dims
+    assert image_container.resolution_level_dims == expected_resolution_level_dims
