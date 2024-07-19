@@ -9,7 +9,8 @@ def test_ome_zarr_reader() -> None:
         # Cannot use s3:// URL due to ome-zarr issue #369
         # "s3://allencell/aics/nuc_morph_data"
         "https://allencell.s3.amazonaws.com/aics/nuc-morph-dataset"
-        "/hipsc_fov_nuclei_timelapse_dataset/hipsc_fov_nuclei_timelapse_data_used_for_analysis"
+        "/hipsc_fov_nuclei_timelapse_dataset"
+        "/hipsc_fov_nuclei_timelapse_data_used_for_analysis"
         "/baseline_colonies_fov_timelapse_dataset/20200323_09_small/raw.ome.zarr"
     )
     scene = "/"
