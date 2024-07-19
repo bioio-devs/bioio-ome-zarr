@@ -75,7 +75,8 @@ class Reader(reader.Reader):
             get_zarr_reader(fs, path)
             return True
 
-        except AttributeError:
+        except (AssertionError, AttributeError):
+            # AssertionError may be raised by ZarrReader.__init__ which calls zarr.exists()
             return False
 
     @classmethod
