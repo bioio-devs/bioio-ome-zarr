@@ -76,7 +76,8 @@ class Reader(reader.Reader):
             return True
 
         except (AssertionError, AttributeError):
-            # AssertionError may be raised by ZarrReader.__init__ which calls zarr.exists()
+            # AssertionError may be raised by ZarrReader.__init__ which calls
+            # zarr.exists()
             return False
 
     @classmethod
