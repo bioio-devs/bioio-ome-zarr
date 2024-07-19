@@ -11,7 +11,7 @@ from bioio_ome_zarr import Reader
         ["https://allencell.s3.amazonaws.com/aics/", dict()],
     ],
 )
-def test_ome_zarr_reader(prefix, fs_kwargs) -> None:
+def test_ome_zarr_reader(prefix: str, fs_kwargs: dict) -> None:
     # ARRANGE
     uri = (
         prefix + "nuc-morph-dataset"
