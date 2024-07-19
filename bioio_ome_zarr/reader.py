@@ -8,7 +8,7 @@ import xarray as xr
 import zarr.storage
 from bioio_base import constants, dimensions, exceptions, io, reader, types
 from fsspec.spec import AbstractFileSystem
-from ome_zarr.io import parse_url, ZarrLocation
+from ome_zarr.io import ZarrLocation
 from ome_zarr.reader import Reader as ZarrReader
 
 from . import utils as metadata_utils
