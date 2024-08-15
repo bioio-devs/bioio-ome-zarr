@@ -4,6 +4,8 @@
 requires = ["setuptools>=65", "wheel", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools_scm]
+
 [project]
 name = "bioio-ome-zarr"
 description = "A BioIO reader plugin for reading Zarr files in the OME format."
