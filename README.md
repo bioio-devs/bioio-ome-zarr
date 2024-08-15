@@ -49,13 +49,6 @@ path = "https://allencell.s3.amazonaws.com/aics/nuc-morph-dataset/hipsc_fov_nucl
 image = BioImage(path)
 print(image.get_image_dask_data())
 ```
-If using an `s3://` path to access a public S3 bucket, the `BioImage` constructor must be given a dictionary with `anon: True` in the `fs_kwargs` argument.
-```python
-from bioio import BioImage
-path = "s3://allencell/aics/nuc-morph-dataset/hipsc_fov_nuclei_timelapse_dataset/hipsc_fov_nuclei_timelapse_data_used_for_analysis/baseline_colonies_fov_timelapse_dataset/20200323_09_small/raw.ome.zarr"
-image = BioImage(path, fs_kwargs=dict(anon=True))
-print(image.get_image_dask_data())
-```
 
 ## Issues
 [_Click here to view all open issues in bioio-devs organization at once_](https://github.com/search?q=user%3Abioio-devs+is%3Aissue+is%3Aopen&type=issues&ref=advsearch) or check this repository's issue tab.
