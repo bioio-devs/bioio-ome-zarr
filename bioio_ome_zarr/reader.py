@@ -234,12 +234,13 @@ class Reader(reader.Reader):
     def channel_names(self) -> Optional[List[str]]:
         if self._channel_names is None:
             try:
-                self._channel_names = [
-                    str(channel["label"])
-                    for channel in self._zarr.root_attrs["omero"]["channels"]
-                ]
+                if "omero" in self._zarr.root_attrs:
+                    self._channel_names = [
+                        str(channel["label"])
+                        for channel in self._zarr.root_attrs["omero"]["channels"]
+                    ]
             except KeyError:
-                self._channel_names = super().channel_names
+                pass
         return self._channel_names
 
     @staticmethod
