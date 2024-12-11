@@ -6,8 +6,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
 
-# package basics
-# https://peps.python.org/pep-0621/
 [project]
 name = "bioio-ome-zarr"
 description = "A BioIO reader plugin for reading Zarr files in the OME format."
@@ -27,10 +25,11 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-  "bioio-base>=1.0.0",
-  "fsspec>=2022.8.0",
-  "ome-zarr>=0.8.0",
-  "xarray>=0.16.1",
+    "bioio-base>=1.0.0",
+    "fsspec>=2022.8.0",
+    "ome-zarr>=0.9.0",
+    "xarray>=0.16.1",
+    "zarr>=2.18.2",
 ]
 
 [project.urls]

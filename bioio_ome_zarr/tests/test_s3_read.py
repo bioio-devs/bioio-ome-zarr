@@ -1,21 +1,29 @@
 import numpy as np
+import pytest
 
 from bioio_ome_zarr import Reader
 
 
-def test_ome_zarr_reader() -> None:
+@pytest.mark.parametrize(
+    ["prefix", "fs_kwargs"],
+    [
+        ["s3://allencell/aics/", dict(anon=True)],
+        ["https://allencell.s3.amazonaws.com/aics/", dict()],
+    ],
+)
+def test_ome_zarr_reader(prefix: str, fs_kwargs: dict) -> None:
     # ARRANGE
     uri = (
-        # Cannot use s3:// URL due to ome-zarr issue #369
-        # "s3://allencell/aics/nuc_morph_data"
-        "https://allencell.s3.amazonaws.com/aics/nuc_morph_data"
-        "/data_for_analysis/baseline_colonies/20200323_09_small/raw.ome.zarr"
+        prefix + "nuc-morph-dataset"
+        "/hipsc_fov_nuclei_timelapse_dataset"
+        "/hipsc_fov_nuclei_timelapse_data_used_for_analysis"
+        "/baseline_colonies_fov_timelapse_dataset/20200323_09_small/raw.ome.zarr"
     )
     scene = "/"
     resolution_level = 0
 
     # ACT
-    image_container = Reader(uri, fs_kwargs=dict(anon=True))
+    image_container = Reader(uri, fs_kwargs=fs_kwargs)
     image_container.set_scene(scene)
     image_container.set_resolution_level(resolution_level)
 

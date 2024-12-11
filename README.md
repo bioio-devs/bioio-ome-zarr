@@ -42,10 +42,10 @@ img.data
 ```
 
 ### Reading from AWS S3
-To read from private S3 buckets or public buckets using `s3://` paths, [credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) must be configured. Public buckets can be accessed without credentials by using the `https://` path.
+To read from private S3 buckets, [credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) must be configured. Public buckets can be accessed without credentials.
 ```python
 from bioio import BioImage
-path = "https://allencell.s3.amazonaws.com/aics/nuc_morph_data/data_for_analysis/baseline_colonies/20200323_09_small/raw.ome.zarr"
+path = "https://allencell.s3.amazonaws.com/aics/nuc-morph-dataset/hipsc_fov_nuclei_timelapse_dataset/hipsc_fov_nuclei_timelapse_data_used_for_analysis/baseline_colonies_fov_timelapse_dataset/20200323_09_small/raw.ome.zarr"
 image = BioImage(path)
 print(image.get_image_dask_data())
 ```

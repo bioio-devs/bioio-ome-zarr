@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import xarray as xr
+import zarr.storage
 from bioio_base import constants, dimensions, exceptions, io, reader, types
 from fsspec.spec import AbstractFileSystem
-from ome_zarr.io import parse_url
+from ome_zarr.io import ZarrLocation
 from ome_zarr.reader import Reader as ZarrReader
 
 from . import utils as metadata_utils
@@ -25,7 +26,7 @@ class Reader(reader.Reader):
     image: types.PathLike
         String or Path to the ZARR root
     fs_kwargs: Dict[str, Any]
-        Ignored
+        Passed to fsspec. For public S3 buckets, use {"anon": True}.
     """
 
     _xarray_dask_data: Optional["xr.DataArray"] = None
@@ -36,6 +37,7 @@ class Reader(reader.Reader):
     _metadata: Optional[Any] = None
     _scenes: Optional[Tuple[str, ...]] = None
     _current_scene_index: int = 0
+
     # Do not provide default value because
     # they may not need to be used by your reader (i.e. input param is an array)
     _fs: "AbstractFileSystem"
@@ -73,7 +75,9 @@ class Reader(reader.Reader):
             get_zarr_reader(fs, path)
             return True
 
-        except AttributeError:
+        except (AssertionError, AttributeError):
+            # AssertionError may be raised by ZarrReader.__init__ which calls
+            # zarr.exists()
             return False
 
     @classmethod
@@ -263,6 +267,4 @@ class Reader(reader.Reader):
 
 
 def get_zarr_reader(fs: AbstractFileSystem, path: str) -> ZarrReader:
-    if fs is not None:
-        path = fs.unstrip_protocol(path)
-    return ZarrReader(parse_url(path, mode="r"))
+    return ZarrReader(ZarrLocation(zarr.storage.FSStore(url=path, fs=fs)))
