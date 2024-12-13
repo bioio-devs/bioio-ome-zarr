@@ -37,7 +37,7 @@ def test_ome_zarr_reader(prefix: str, fs_kwargs: dict) -> None:
     assert image_container.dims.shape == (570, 2, 42, 1248, 1824)
     assert image_container.channel_names == ["EGFP", "Bright"]
     assert image_container.current_resolution_level == resolution_level
-    
+
     # pixel sized in (Z, Y, X) order
     assert image_container.physical_pixel_sizes == (
         0.7579,
