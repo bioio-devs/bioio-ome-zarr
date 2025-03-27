@@ -182,8 +182,7 @@ class Reader(reader.Reader):
             warnings.warn(f"Could not parse zarr pixel size: {e}")
             z_size, y_size, x_size = None, None, None
 
-        self._physical_pixel_sizes = types.PhysicalPixelSizes(z_size, y_size, x_size)
-        return self._physical_pixel_sizes
+        return types.PhysicalPixelSizes(z_size, y_size, x_size)
 
     def _get_pixel_size(
         self,
