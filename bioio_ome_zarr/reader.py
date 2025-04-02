@@ -174,19 +174,15 @@ class Reader(reader.Reader):
     @property
     def physical_pixel_sizes(self) -> types.PhysicalPixelSizes:
         """Return the physical pixel sizes of the image."""
-        if self._physical_pixel_sizes is None:
-            try:
-                z_size, y_size, x_size = self._get_pixel_size(
-                    list(self.dims.order),
-                )
-            except Exception as e:
-                warnings.warn(f"Could not parse zarr pixel size: {e}")
-                z_size, y_size, x_size = None, None, None
-
-            self._physical_pixel_sizes = types.PhysicalPixelSizes(
-                z_size, y_size, x_size
+        try:
+            z_size, y_size, x_size = self._get_pixel_size(
+                list(self.dims.order),
             )
-        return self._physical_pixel_sizes
+        except Exception as e:
+            warnings.warn(f"Could not parse zarr pixel size: {e}")
+            z_size, y_size, x_size = None, None, None
+
+        return types.PhysicalPixelSizes(z_size, y_size, x_size)
 
     def _get_pixel_size(
         self,
