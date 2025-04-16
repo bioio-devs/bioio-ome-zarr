@@ -5,90 +5,103 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import xarray as xr
-import zarr.storage
+import zarr
 from bioio_base import constants, dimensions, exceptions, io, reader, types
 from fsspec.spec import AbstractFileSystem
-from ome_zarr.io import ZarrLocation
-from ome_zarr.reader import Reader as ZarrReader
+from s3fs import S3FileSystem
+from zarr.core.group import GroupMetadata
 
 from . import utils as metadata_utils
 
-###############################################################################
+STORAGE_OPTIONS = {"anon": True}
 
 
 class Reader(reader.Reader):
     """
-    The main class of each reader plugin. This class is subclass
-    of the abstract class reader (BaseReader) in bioio-base.
+    Unified Zarr Reader that supports both V2 and V3 metadata schemas.
 
-    Parameters
-    ----------
-    image: types.PathLike
-        String or Path to the ZARR root
-    fs_kwargs: Dict[str, Any]
-        Passed to fsspec. For public S3 buckets, use {"anon": True}.
+    On initialization, this reader expands the provided image path using
+    io.pathlike_to_fs (which returns _fs and _path) and then opens the Zarr group.
+
+    It distinguishes between the V3 schema (if "ome" key exists) and the V2 schema
+    (if not) by setting self._version accordingly, and then uses that flag to drive
+    metadata extraction for scenes, dims, scale arrays, etc.
+
+    Attributes:
+      _fs: An AbstractFileSystem instance (from fsspec).
+      _path: The resolved image path.
+      _zarr: The opened Zarr group.
+      _version: 3 for V3 metadata (if "ome" key exists), otherwise 2.
     """
 
-    _xarray_dask_data: Optional["xr.DataArray"] = None
-    _xarray_data: Optional["xr.DataArray"] = None
-    _mosaic_xarray_dask_data: Optional["xr.DataArray"] = None
-    _mosaic_xarray_data: Optional["xr.DataArray"] = None
-    _dims: Optional[dimensions.Dimensions] = None
-    _metadata: Optional[Any] = None
+    _xarray_dask_data: Optional[xr.DataArray] = None
+    _xarray_data: Optional[xr.DataArray] = None
     _scenes: Optional[Tuple[str, ...]] = None
     _current_scene_index: int = 0
+    _current_resolution_level: int = 0
 
-    # Do not provide default value because
-    # they may not need to be used by your reader (i.e. input param is an array)
-    _fs: "AbstractFileSystem"
+    _channel_names: Optional[List[str]] = None
+
+    _fs: AbstractFileSystem  # now declared from io.pathlike_to_fs output
     _path: str
-
-    # Required Methods
+    _zarr: zarr.Group
+    _version: int  # 3 for V3, 2 for V2
 
     def __init__(
         self,
         image: types.PathLike,
         fs_kwargs: Dict[str, Any] = {},
     ):
-        # Expand details of provided image
+        # Expand details of provided image.
         self._fs, self._path = io.pathlike_to_fs(
             image,
             enforce_exists=False,
             fs_kwargs=fs_kwargs,
         )
+        if isinstance(self._fs, S3FileSystem):
+            self._path = str(image)
 
-        # Enforce valid image
         if not self._is_supported_image(self._fs, self._path):
             raise exceptions.UnsupportedFileFormatError(
                 self.__class__.__name__,
                 self._path,
                 "Could not find a .zgroup or .zarray file at the provided path.",
             )
+        try:
+            if isinstance(self._fs, S3FileSystem):
+                self._zarr = zarr.open_group(
+                    self._path, mode="r", storage_options={"anon": True}
+                )
+            else:
+                self._zarr = zarr.open_group(self._path, mode="r")
+        except Exception as e:
+            raise exceptions.UnsupportedFileFormatError(
+                self.__class__.__name__,
+                self._path,
+                f"Failed to open the Zarr group: {e}",
+            )
+        # Determine metadata schema version: if "ome" key exists, assume V3; else V2.
+        self._version = 3 if "ome" in self._zarr.attrs else 2
 
-        self._zarr = get_zarr_reader(self._fs, self._path).zarr
-        self._physical_pixel_sizes: Optional[types.PhysicalPixelSizes] = None
-        self._channel_names: Optional[List[str]] = None
-
+    @staticmethod
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
         try:
-            get_zarr_reader(fs, path)
+            # If the filesystem indicates S3, pass storage_options accordingly.
+            if isinstance(fs, S3FileSystem):
+                zarr.open_group(path, mode="r", storage_options={"anon": True})
+            else:
+                zarr.open_group(path, mode="r")
             return True
-
-        except (AssertionError, AttributeError):
-            # AssertionError may be raised by ZarrReader.__init__ which calls
-            # zarr.exists()
+        except Exception:
             return False
 
     @classmethod
     def is_supported_image(
-        cls,
-        image: types.ImageLike,
-        fs_kwargs: Dict[str, Any] = {},
-        **kwargs: Any,
+        cls, image: types.PathLike, fs_kwargs: Dict[str, Any] = {}, **kwargs: Any
     ) -> bool:
         if isinstance(image, (str, Path)):
-            return cls._is_supported_image(None, str(image), **kwargs)
+            return cls._is_supported_image(None, str(Path(image).resolve()), **kwargs)
         else:
             return reader.Reader.is_supported_image(
                 cls, image, fs_kwargs=fs_kwargs, **kwargs
@@ -96,42 +109,55 @@ class Reader(reader.Reader):
 
     @property
     def scenes(self) -> Tuple[str, ...]:
-        if self._scenes is None:
-            scenes = self._zarr.root_attrs["multiscales"]
+        key = "multiscales"
+        if self._version == 3:
+            scenes_meta = self._zarr.attrs.get("ome", {}).get(key, [])
+        else:
+            scenes_meta = self._zarr.attrs.get(key, [])
+        if not scenes_meta:
+            raise ValueError("No multiscales metadata found.")
+        if all("name" in scene for scene in scenes_meta) and (
+            len({scene["name"] for scene in scenes_meta}) == len(scenes_meta)
+        ):
+            return tuple(scene["name"] for scene in scenes_meta)
+        return tuple(
+            metadata_utils.generate_ome_image_id(i) for i in range(len(scenes_meta))
+        )
 
-            # if (each scene has a name) and (that name is unique) use name.
-            # otherwise generate scene names.
-            if all("name" in scene for scene in scenes) and (
-                len({scene["name"] for scene in scenes}) == len(scenes)
-            ):
-                self._scenes = tuple(str(scene["name"]) for scene in scenes)
-            else:
-                self._scenes = tuple(
-                    metadata_utils.generate_ome_image_id(i)
-                    for i in range(len(self._zarr.root_attrs["multiscales"]))
-                )
-        return self._scenes
+    @property
+    def ome_dims(self) -> Tuple[str, ...]:
+        key = "multiscales"
+        if self._version == 3:
+            ms = self._zarr.attrs.get("ome", {}).get(key, [])[self._current_scene_index]
+        else:
+            ms = self._zarr.attrs.get(key, [])[self._current_scene_index]
+        axes = ms.get("axes", [])
+        if axes:
+            return tuple(ax["name"].upper() for ax in axes)
+        else:
+            # No axes metadata, use shape of the first dataset array to guess dims.
+            datasets = ms.get("datasets", [])
+            if datasets:
+                data_path = datasets[0].get("path")
+                if data_path is not None:
+                    arr = self._zarr[data_path]
+                    return tuple(Reader._guess_dim_order(arr.shape))
+            # If no dataset exists, return an empty tuple.
+            return tuple()
 
     @property
     def resolution_levels(self) -> Tuple[int, ...]:
-        """
-        Returns
-        -------
-        resolution_levels: Tuple[str, ...]
-            Return the available resolution levels for the current scene.
-            By default these are ordered from highest resolution to lowest
-            resolution.
-        """
-        return tuple(
-            rl
-            for rl in range(
-                len(
-                    self._zarr.root_attrs["multiscales"][self.current_scene_index][
-                        "datasets"
-                    ]
-                )
-            )
-        )
+        key = "multiscales"
+        if self._version == 3:
+            ms = self._zarr.attrs.get("ome", {}).get(key, [])[self._current_scene_index]
+        else:
+            ms = self._zarr.attrs.get(key, [])[self._current_scene_index]
+        datasets = ms.get("datasets", [])
+        return tuple(range(len(datasets)))
+
+    @property
+    def current_scene(self) -> str:
+        return self.scenes[self._current_scene_index]
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
@@ -140,104 +166,41 @@ class Reader(reader.Reader):
         return self._xarr_format(delayed=False)
 
     def _xarr_format(self, delayed: bool) -> xr.DataArray:
-        data_path = self._zarr.root_attrs["multiscales"][self.current_scene_index][
-            "datasets"
-        ][self.current_resolution_level]["path"]
-        image_data = self._zarr.load(data_path)
-
-        axes = self._zarr.root_attrs["multiscales"][self.current_scene_index].get(
-            "axes"
-        )
-        if axes:
-            dims = [sub["name"].upper() for sub in axes]
+        key = "multiscales"
+        if self._version == 3:
+            ms = self._zarr.attrs.get("ome", {}).get(key, [])[self._current_scene_index]
         else:
-            dims = list(Reader._guess_dim_order(image_data.shape))
-
+            ms = self._zarr.attrs.get(key, [])[self._current_scene_index]
+        try:
+            dataset = ms.get("datasets", [])[self._current_resolution_level]
+        except IndexError:
+            raise ValueError("Invalid resolution level index.")
+        data_path = dataset.get("path")
+        if data_path is None:
+            raise ValueError("Dataset metadata is missing a 'path'.")
+        arr = self._zarr[data_path]
         if not delayed:
-            image_data = image_data.compute()
+            data = arr[:]
+        else:
+            try:
+                import dask.array as da
 
+                data = da.from_array(arr, chunks=arr.chunks)
+            except ImportError:
+                data = arr
+        dims = self.ome_dims
         coords = self._get_coords(
-            dims,
-            image_data.shape,
+            list(dims),
+            data.shape,
             scene=self.current_scene,
             channel_names=self.channel_names,
         )
-
         return xr.DataArray(
-            image_data,
+            data,
             dims=dims,
             coords=coords,
-            attrs={constants.METADATA_UNPROCESSED: self._zarr.root_attrs},
+            attrs={constants.METADATA_UNPROCESSED: self._zarr.attrs},
         )
-
-    # Optional Methods
-    @property
-    def physical_pixel_sizes(self) -> types.PhysicalPixelSizes:
-        """Return the physical pixel sizes of the image."""
-        try:
-            z_size, y_size, x_size = self._get_pixel_size(
-                list(self.dims.order),
-            )
-        except Exception as e:
-            warnings.warn(f"Could not parse zarr pixel size: {e}")
-            z_size, y_size, x_size = None, None, None
-
-        return types.PhysicalPixelSizes(z_size, y_size, x_size)
-
-    def _get_pixel_size(
-        self,
-        dims: List[str],
-    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-        # OmeZarr file may contain an additional set of "coordinateTransformations"
-        # these coefficents are applied to all resolution levels.
-        if (
-            "coordinateTransformations"
-            in self._zarr.root_attrs["multiscales"][self.current_scene_index]
-        ):
-            universal_res_consts = self._zarr.root_attrs["multiscales"][
-                self.current_scene_index
-            ]["coordinateTransformations"][0]["scale"]
-        else:
-            universal_res_consts = [1.0 for _ in range(len(dims))]
-
-        coord_transform = self._zarr.root_attrs["multiscales"][
-            self.current_scene_index
-        ]["datasets"][self.current_resolution_level]["coordinateTransformations"]
-
-        spatial_coeffs = {}
-
-        for dim in [
-            dimensions.DimensionNames.SpatialX,
-            dimensions.DimensionNames.SpatialY,
-            dimensions.DimensionNames.SpatialZ,
-        ]:
-            if dim in dims:
-                dim_index = dims.index(dim)
-                spatial_coeffs[dim] = (
-                    coord_transform[0]["scale"][dim_index]
-                    * universal_res_consts[dim_index]
-                )
-            else:
-                spatial_coeffs[dim] = None
-
-        return (
-            spatial_coeffs[dimensions.DimensionNames.SpatialZ],
-            spatial_coeffs[dimensions.DimensionNames.SpatialY],
-            spatial_coeffs[dimensions.DimensionNames.SpatialX],
-        )
-
-    @property
-    def channel_names(self) -> Optional[List[str]]:
-        if self._channel_names is None:
-            try:
-                if "omero" in self._zarr.root_attrs:
-                    self._channel_names = [
-                        str(channel["label"])
-                        for channel in self._zarr.root_attrs["omero"]["channels"]
-                    ]
-            except KeyError:
-                pass
-        return self._channel_names
 
     @staticmethod
     def _get_coords(
@@ -247,10 +210,7 @@ class Reader(reader.Reader):
         channel_names: Optional[List[str]],
     ) -> Dict[str, Any]:
         coords: Dict[str, Any] = {}
-
-        # Use dims for coord determination
         if dimensions.DimensionNames.Channel in dims:
-            # Generate channel names if no existing channel names
             if channel_names is None:
                 coords[dimensions.DimensionNames.Channel] = [
                     metadata_utils.generate_ome_channel_id(image_id=scene, channel_id=i)
@@ -258,9 +218,116 @@ class Reader(reader.Reader):
                 ]
             else:
                 coords[dimensions.DimensionNames.Channel] = channel_names
-
         return coords
 
+    def _get_scale_array(self, dims: Tuple[str, ...]) -> List[float]:
+        """
+        Retrieves the effective scale array for the current dataset.
 
-def get_zarr_reader(fs: AbstractFileSystem, path: str) -> ZarrReader:
-    return ZarrReader(ZarrLocation(zarr.storage.FSStore(url=path, fs=fs)))
+        It first checks if the multiscale metadata (at key "multiscales") contains
+        an overall coordinateTransformation (e.g. a universal scaling factor) and
+        uses that as a multiplier. Then it retrieves the dataset's
+        coordinateTransformations scale array and multiplies each corresponding
+        element.
+
+        Assumes the final scale array is provided in the same order as dims.
+        """
+        key = "multiscales"
+        if self._version == 3:
+            ms = self._zarr.attrs.get("ome", {}).get(key, [])[self._current_scene_index]
+        else:
+            ms = self._zarr.attrs.get(key, [])[self._current_scene_index]
+
+        # Get overall (universal) scale from the multiscale level if present.
+        overall_ct = ms.get("coordinateTransformations", [])
+        if overall_ct:
+            overall_scale = overall_ct[0].get("scale", [1.0] * len(dims))
+        else:
+            overall_scale = [1.0] * len(dims)
+
+        datasets = ms.get("datasets", [])
+        if self._current_resolution_level >= len(datasets):
+            raise ValueError("Invalid resolution level index.")
+        dataset = datasets[self._current_resolution_level]
+        try:
+            ds_ct = dataset["coordinateTransformations"][0]
+        except (KeyError, IndexError):
+            raise ValueError("Missing coordinateTransformations in dataset metadata.")
+        ds_scale = ds_ct.get("scale")
+        if ds_scale is None or len(ds_scale) != len(dims):
+            raise ValueError(
+                "Dataset scale missing or does not match the number of dimensions."
+            )
+
+        # Compute effective scales: element-wise multiplication.
+        effective_scale = [overall_scale[i] * ds_scale[i] for i in range(len(dims))]
+        return effective_scale
+
+    @property
+    def time_interval(self) -> Optional[float]:
+        dims = self.ome_dims
+        if "T" not in dims:
+            return None
+        scale_array = self._get_scale_array(dims)
+        return scale_array[dims.index("T")]
+
+    def _get_pixel_size(
+        self, dims: Tuple[str, ...]
+    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        scale_array = self._get_scale_array(dims)
+        z = scale_array[dims.index("Z")] if "Z" in dims else None
+        y = scale_array[dims.index("Y")] if "Y" in dims else None
+        x = scale_array[dims.index("X")] if "X" in dims else None
+        return (z, y, x)
+
+    @property
+    def physical_pixel_sizes(self) -> types.PhysicalPixelSizes:
+        try:
+            dims = self.ome_dims
+            z, y, x = self._get_pixel_size(dims)
+        except Exception as e:
+            warnings.warn(f"Could not parse physical pixel sizes: {e}")
+            z, y, x = None, None, None
+        return types.PhysicalPixelSizes(z, y, x)
+
+    @property
+    def channel_names(self) -> Optional[List[str]]:
+        if self._channel_names is None:
+            if self._version == 3:
+                channels = (
+                    self._zarr.attrs.get("ome", {}).get("omero", {}).get("channels", [])
+                )
+            else:
+                channels = self._zarr.attrs.get("omero", {}).get("channels", [])
+            try:
+                self._channel_names = [str(ch["label"]) for ch in channels]
+            except Exception:
+                self._channel_names = None
+        return self._channel_names
+
+    @property
+    def metadata(self) -> GroupMetadata:
+        """
+        Returns the metadata of the underlying Zarr group.
+        Expected to be of type GroupMetadata.
+        """
+        return self._zarr.metadata
+
+    @property
+    def scale(self) -> types.Scale:
+        """
+        Constructs and returns a Scale object where:
+          - T is taken from the property time_interval,
+          - Z, Y, and X are taken from physical_pixel_sizes,
+          - and C (channel) is taken from the dataset's scale array if present
+        """
+        dims = self.ome_dims
+        scale_array = self._get_scale_array(dims)
+        c = scale_array[dims.index("C")] if "C" in dims else None
+        return types.Scale(
+            T=self.time_interval,
+            C=c,
+            Z=self.physical_pixel_sizes.Z,
+            Y=self.physical_pixel_sizes.Y,
+            X=self.physical_pixel_sizes.X,
+        )
