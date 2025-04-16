@@ -28,6 +28,7 @@ dynamic = ["version"]
 dependencies = [
     "bioio-base>=1.0.0",
     "fsspec>=2022.8.0",
+    "s3fs>=2023.9.0",
     "xarray>=0.16.1",
     "zarr>=3.0.6",
 ]
