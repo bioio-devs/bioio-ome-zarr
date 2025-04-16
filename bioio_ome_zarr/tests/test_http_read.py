@@ -68,7 +68,7 @@ ome_host = "https://uk1s3.embassy.ebi.ac.uk/ebi-ngff-challenge-2024/"
         ),
     ],
 )
-def test_ome_zarr_reader(
+def test_https_read_zarrV3(
     uri: str,
     set_scene: str,
     set_resolution_level: int,
