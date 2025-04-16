@@ -205,6 +205,7 @@ def test_ome_zarr_reader(
         expected_channel_names=expected_channel_names,
         expected_physical_pixel_sizes=expected_physical_pixel_sizes,
         expected_metadata_type=GroupMetadata,
+        reader_kwargs={},
     )
 
 
