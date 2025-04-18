@@ -2,7 +2,10 @@
 
 """Top-level package for bioio_ome_zarr."""
 
+import os
 from importlib.metadata import PackageNotFoundError, version
+
+os.environ.setdefault("ZARR_V3_EXPERIMENTAL_API", "1")
 
 try:
     __version__ = version("bioio-ome-zarr")
