@@ -35,6 +35,8 @@ class Reader(reader.Reader):
     _fs: AbstractFileSystem
     _path: str
 
+    _current_scene_index: int = 0
+
     def __init__(
         self,
         image: types.PathLike,
