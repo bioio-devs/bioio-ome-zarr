@@ -17,6 +17,9 @@ on:
     # (Since these CRONs are used by a lot of people -
     # let's be nice to the servers and schedule it _not_ on the hour)
     - cron: "24 18 * * 1"
+  repository_dispatch:
+    # this allows the workflow to be triggered from other workflows
+    types: [trigger-workflow]
   workflow_dispatch:
 
 jobs:
