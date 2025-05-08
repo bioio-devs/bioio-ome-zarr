@@ -140,10 +140,6 @@ class Reader(reader.Reader):
         ms = self._multiscales_metadata[self._current_scene_index]
         return tuple(range(len(ms.get("datasets", []))))
 
-    @property
-    def current_scene(self) -> str:
-        return self.scenes[self._current_scene_index]
-
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
 
