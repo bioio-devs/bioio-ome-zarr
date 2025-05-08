@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
+import logging
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -13,6 +13,12 @@ from s3fs import S3FileSystem
 from zarr.core.group import GroupMetadata
 
 from . import utils as metadata_utils
+
+###############################################################################
+
+log = logging.getLogger(__name__)
+
+###############################################################################
 
 
 class Reader(reader.Reader):
@@ -122,10 +128,8 @@ class Reader(reader.Reader):
         if axes:
             return tuple(ax["name"].upper() for ax in axes)
         datasets = multiscales.get("datasets", [])
-        if datasets and datasets[0].get("path") is not None:
-            arr = self._zarr[datasets[0]["path"]]
-            return tuple(Reader._guess_dim_order(arr.shape))
-        return tuple()
+        arr = self._zarr[datasets[0]["path"]]
+        return tuple(Reader._guess_dim_order(arr.shape))
 
     @property
     def resolution_levels(self) -> Tuple[int, ...]:
@@ -187,7 +191,7 @@ class Reader(reader.Reader):
             data,
             dims=self._get_ome_dims(),
             coords=coords,
-            attrs={constants.METADATA_UNPROCESSED: self._zarr.metadata},
+            attrs={constants.METADATA_UNPROCESSED: self.metadata},
         )
 
     @staticmethod
@@ -246,13 +250,19 @@ class Reader(reader.Reader):
             The elementwise product of the global and dataset-specific scales.
         """
         multiscales = self._multiscales_metadata[self._current_scene_index]
+
+        if "coordinateTransformations" not in multiscales:
+            log.warning(
+                "No overall 'coordinateTransformations' found; "
+                "defaulting overall scale to 1.0 for each dim"
+            )
         overall_scale = multiscales.get(
             "coordinateTransformations", [{"scale": [1.0] * len(dims)}]
         )[0]["scale"]
-        ds_scale = multiscales["datasets"][self._current_resolution_level][
+        dataset_scale = multiscales["datasets"][self._current_resolution_level][
             "coordinateTransformations"
         ][0]["scale"]
-        return [o * d for o, d in zip(overall_scale, ds_scale)]
+        return [o * d for o, d in zip(overall_scale, dataset_scale)]
 
     @property
     def time_interval(self) -> Optional[types.TimeInterval]:
