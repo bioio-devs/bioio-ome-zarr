@@ -220,6 +220,7 @@ class Reader(reader.Reader):
         """
         coords = {}
         if dimensions.DimensionNames.Channel in dims:
+            # Generate channel names if no existing channel names
             if channel_names is None:
                 coords[dimensions.DimensionNames.Channel] = [
                     metadata_utils.generate_ome_channel_id(scene, i)
