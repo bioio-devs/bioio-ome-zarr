@@ -117,11 +117,11 @@ class Reader(reader.Reader):
         return self._scenes
 
     def _get_ome_dims(self) -> Tuple[str, ...]:
-        ms = self._multiscales_metadata[self._current_scene_index]
-        axes = ms.get("axes", [])
+        multiscales = self._multiscales_metadata[self._current_scene_index]
+        axes = multiscales.get("axes", [])
         if axes:
             return tuple(ax["name"].upper() for ax in axes)
-        datasets = ms.get("datasets", [])
+        datasets = multiscales.get("datasets", [])
         if datasets and datasets[0].get("path") is not None:
             arr = self._zarr[datasets[0]["path"]]
             return tuple(Reader._guess_dim_order(arr.shape))
@@ -137,8 +137,8 @@ class Reader(reader.Reader):
             By default these are ordered from highest resolution to lowest
             resolution.
         """
-        ms = self._multiscales_metadata[self._current_scene_index]
-        return tuple(range(len(ms.get("datasets", []))))
+        multiscales = self._multiscales_metadata[self._current_scene_index]
+        return tuple(range(len(multiscales.get("datasets", []))))
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_format(delayed=True)
@@ -167,8 +167,8 @@ class Reader(reader.Reader):
         * Attaches the original Zarr attributes under
           `constants.METADATA_UNPROCESSED`.
         """
-        ms = self._multiscales_metadata[self._current_scene_index]
-        datasets = ms.get("datasets", [])
+        multiscales = self._multiscales_metadata[self._current_scene_index]
+        datasets = multiscales.get("datasets", [])
         data_path = datasets[self._current_resolution_level].get("path")
         arr = self._zarr[data_path]
 
@@ -244,11 +244,11 @@ class Reader(reader.Reader):
         scale : list of float
             The elementwise product of the global and dataset-specific scales.
         """
-        ms = self._multiscales_metadata[self._current_scene_index]
-        overall_scale = ms.get(
+        multiscales = self._multiscales_metadata[self._current_scene_index]
+        overall_scale = multiscales.get(
             "coordinateTransformations", [{"scale": [1.0] * len(dims)}]
         )[0]["scale"]
-        ds_scale = ms["datasets"][self._current_resolution_level][
+        ds_scale = multiscales["datasets"][self._current_resolution_level][
             "coordinateTransformations"
         ][0]["scale"]
         return [o * d for o, d in zip(overall_scale, ds_scale)]
