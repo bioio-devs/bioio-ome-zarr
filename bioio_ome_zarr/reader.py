@@ -111,15 +111,18 @@ class Reader(reader.Reader):
             A tuple of valid scene ids in the file.
         """
         if self._scenes is None:
-            if all("name" in scene for scene in self._multiscales_metadata):
-                self._scenes = tuple(
-                    scene["name"] for scene in self._multiscales_metadata
-                )
+            scenes = [scene.get("name") for scene in self._multiscales_metadata]
+
+            # Check that every name exists and that they're all unique
+            if all(scenes) and len(set(scenes)) == len(scenes):
+                self._scenes = tuple(scenes)
             else:
+                # Otherwise generate default IDs by index
                 self._scenes = tuple(
                     metadata_utils.generate_ome_image_id(i)
                     for i in range(len(self._multiscales_metadata))
                 )
+
         return self._scenes
 
     def _get_ome_dims(self) -> Tuple[str, ...]:

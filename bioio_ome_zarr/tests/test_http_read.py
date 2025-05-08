@@ -40,8 +40,8 @@ ome_host = "https://uk1s3.embassy.ebi.ac.uk/ebi-ngff-challenge-2024/"
         ),
         (
             f"{ome_host}4ffaeed2-fa70-4907-820f-8a96ef683095.zarr",
-            "",
-            "",
+            "Image:0",
+            "Image:0",
             0,
             (0, 1),
             (1, 2, 1, 512, 512),
@@ -54,8 +54,8 @@ ome_host = "https://uk1s3.embassy.ebi.ac.uk/ebi-ngff-challenge-2024/"
         ),
         (
             f"{ome_host}c0e5d621-62cc-43a6-9dad-2ddab8959d17.zarr",
-            "",
-            "",
+            "Image:0",
+            "Image:0",
             0,
             (0, 1, 2),
             (163, 2, 1, 1024, 1024),
