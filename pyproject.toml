@@ -26,8 +26,10 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
     "bioio-base>=1.0.0",
-    "fsspec>=2022.8.0",
+    "fsspec[http]>=2022.8.0",
+    "ngff-zarr>=0.8.2",
     "s3fs>=2023.9.0",
+    "scikit-image!=0.23.0",
     "xarray>=0.16.1",
     "zarr>=3.0.6",
 ]

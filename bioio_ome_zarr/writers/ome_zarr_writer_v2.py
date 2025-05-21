@@ -11,7 +11,7 @@ import zarr
 from ngff_zarr.zarr_metadata import Axis, Dataset, Metadata, Scale, Translation
 from zarr.storage import FsspecStore, LocalStore
 
-from ..reader import Reader
+from bioio_ome_zarr import Reader
 
 log = logging.getLogger(__name__)
 
@@ -214,6 +214,7 @@ class OmeZarrWriter:
                 chunks=level_chunk_sizes[i],
                 dtype=dtype,
                 compressor=compressor,
+                zarr_format=2,
             )
             self.levels.append(ZarrLevel(shape, level_chunk_sizes[i], dtype, arr))
 
