@@ -157,7 +157,7 @@ def compute_level_chunk_sizes_zslice(shapes: List[DimTuple]) -> List[DimTuple]:
     return chunk_sizes
 
 
-class OmeZarrWriter:
+class OMEZarrWriter:
     """Class to write OME-Zarr files."""
 
     def __init__(self) -> None:

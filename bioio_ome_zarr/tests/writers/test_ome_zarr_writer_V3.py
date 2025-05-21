@@ -7,7 +7,7 @@ import pytest
 import zarr
 from ngff_zarr.validate import validate
 
-from bioio_ome_zarr.writers import V3OmeZarrWriter, default_axes, downsample_data
+from bioio_ome_zarr.writers import OmeZarrWriterV3, default_axes, downsample_data
 
 # Marker to skip all OMEZarrWriter–dependent tests on Python < 3.11
 needs_py311 = pytest.mark.skipif(
@@ -55,7 +55,7 @@ def test_write_full_volume_and_metadata(
     data = np.random.randint(0, 255, size=shape, dtype=np.uint8)
     tmpdir = tempfile.mkdtemp()
     try:
-        writer = V3OmeZarrWriter(
+        writer = OmeZarrWriterV3(
             store=tmpdir,
             shape=shape,
             dtype=data.dtype,
@@ -124,7 +124,7 @@ def test_compute_level_shapes(
     num_levels: int,
     expected: list[tuple[int, int, int, int, int]],
 ) -> None:
-    writer = V3OmeZarrWriter(
+    writer = OmeZarrWriterV3(
         store=tempfile.mkdtemp(),
         shape=in_shape,
         dtype=np.uint8,
@@ -142,7 +142,7 @@ def test_compute_level_shapes(
 @needs_py311
 def test_suggest_chunks() -> None:
     shape = (1, 1, 1, 5000, 5000)
-    writer = V3OmeZarrWriter(store=tempfile.mkdtemp(), shape=shape, dtype=np.uint32)
+    writer = OmeZarrWriterV3(store=tempfile.mkdtemp(), shape=shape, dtype=np.uint32)
     ck = writer._suggest_chunks(shape)
     assert ck == (1, 1, 1, 4096, 4096)
 
@@ -152,7 +152,7 @@ def test_sharding_parameter() -> None:
     shape = (1, 1, 1, 4, 4)
     requested_shards = (1, 1, 2, 2, 2)
     chunks = (1, 1, 1, 2, 2)
-    writer = V3OmeZarrWriter(
+    writer = OmeZarrWriterV3(
         store=tempfile.mkdtemp(),
         shape=shape,
         dtype=np.uint8,
@@ -178,7 +178,7 @@ def test_ome_ngff_metadata_validation() -> None:
     data = np.random.randint(0, 255, size=shape, dtype=np.uint8)
     tmpdir = tempfile.mkdtemp()
     try:
-        writer = V3OmeZarrWriter(store=tmpdir, shape=shape, dtype=data.dtype)
+        writer = OmeZarrWriterV3(store=tmpdir, shape=shape, dtype=data.dtype)
         writer.write_full_volume(data)
         grp = zarr.open(tmpdir, mode="r")
         ome_meta = grp.attrs.asdict()

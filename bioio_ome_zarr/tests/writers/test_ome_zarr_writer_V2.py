@@ -12,7 +12,7 @@ from ngff_zarr import from_ngff_zarr
 
 from bioio_ome_zarr.writers.ome_zarr_writer_v2 import (
     DimTuple,
-    OmeZarrWriter,
+    OMEZarrWriter,
     chunk_size_from_memory_target,
     compute_level_chunk_sizes_zslice,
     compute_level_shapes,
@@ -149,7 +149,7 @@ def test_write_ome_zarr(
     chunk_sizes = compute_level_chunk_sizes_zslice(shapes)
 
     # Create an OmeZarrWriter object
-    writer = OmeZarrWriter()
+    writer = OMEZarrWriter()
 
     # Initialize the store. Use s3 url or local directory path!
     save_uri = tmp_path / filename
@@ -229,7 +229,7 @@ def test_write_ome_zarr_iterative(
     chunk_sizes = compute_level_chunk_sizes_zslice(shapes)
 
     # Create an OmeZarrWriter object
-    writer = OmeZarrWriter()
+    writer = OMEZarrWriter()
 
     # Initialize the store. Use s3 url or local directory path!
     save_uri = tmp_path / filename
