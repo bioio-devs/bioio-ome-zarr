@@ -51,7 +51,7 @@ jobs:
     - uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: arn:aws:iam::978220035532:role/bioio_github
-        role-session-name: bioio-lif-${{ github.sha }}
+        role-session-name: bioio-ome-zarr-${{ github.sha }}
         aws-region: ${{ env.AWS_REGION }}
     - name: Set up Python
       uses: actions/setup-python@v5
