@@ -58,6 +58,10 @@ test = [
 [project.entry-points."bioio.readers"]
 bioio-ome-zarr = "bioio_ome_zarr"
 
+[project.entry-points."bioio.writers"]
+OmeZarrWriterV2 = "bioio_ome_zarr.writers:V2OmeZarrWriter"
+OmeZarrWriterV3 = "bioio_ome_zarr.writers:V3OmeZarrWriter"
+
 # build settings
 # https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html
 [tool.setuptools]
