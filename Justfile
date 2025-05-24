@@ -36,6 +36,10 @@ lint:
 test:
 	pytest --cov-report xml --cov-report html --cov=bioio_ome_zarr bioio_ome_zarr/tests
 
+# run performance tests
+benchmark:
+	python scripts/benchmark.py
+
 # run lint and then run tests
 build:
 	just lint
