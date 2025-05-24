@@ -3,6 +3,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pytest
 from bioio_base import dimensions, exceptions, test_utilities
+from zarr.core.group import GroupMetadata
 
 from bioio_ome_zarr import Reader
 
@@ -203,7 +204,8 @@ def test_ome_zarr_reader(
         expected_dims_order=expected_dims_order,
         expected_channel_names=expected_channel_names,
         expected_physical_pixel_sizes=expected_physical_pixel_sizes,
-        expected_metadata_type=dict,
+        expected_metadata_type=GroupMetadata,
+        reader_kwargs={},
     )
 
 
