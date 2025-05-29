@@ -1,5 +1,4 @@
 import shutil
-import sys
 import tempfile
 
 import numpy as np
@@ -8,12 +7,6 @@ import zarr
 from ngff_zarr.validate import validate
 
 from bioio_ome_zarr.writers import OmeZarrWriterV3, default_axes, downsample_data
-
-# Marker to skip all OMEZarrWriter–dependent tests on Python < 3.11
-needs_py311 = pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="V3OmeZarrWriter requires Python ≥3.11 and zarr≥3.0.6",
-)
 
 
 def test_downsample_data() -> None:
@@ -39,7 +32,6 @@ def test_default_axes() -> None:
     assert axes == expected
 
 
-@needs_py311
 @pytest.mark.parametrize(
     "scale_factors,num_levels",
     [
@@ -94,7 +86,6 @@ def test_write_full_volume_and_metadata(
         shutil.rmtree(tmpdir)
 
 
-@needs_py311
 @pytest.mark.parametrize(
     "in_shape,scale_factors,num_levels,expected",
     [
@@ -139,7 +130,6 @@ def test_compute_level_shapes(
     assert out == expected
 
 
-@needs_py311
 def test_suggest_chunks() -> None:
     shape = (1, 1, 1, 5000, 5000)
     writer = OmeZarrWriterV3(store=tempfile.mkdtemp(), shape=shape, dtype=np.uint32)
@@ -147,7 +137,6 @@ def test_suggest_chunks() -> None:
     assert ck == (1, 1, 1, 4096, 4096)
 
 
-@needs_py311
 def test_sharding_parameter() -> None:
     shape = (1, 1, 1, 4, 4)
     requested_shards = (1, 1, 2, 2, 2)
@@ -171,7 +160,6 @@ def test_sharding_parameter() -> None:
     assert writer.chunks == expected_chunks
 
 
-@needs_py311
 def test_ome_ngff_metadata_validation() -> None:
     # Validate OME-Zarr metadata against NGFF schema v0.5
     shape = (1, 1, 1, 4, 4)
