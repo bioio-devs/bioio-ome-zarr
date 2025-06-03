@@ -153,89 +153,66 @@ for t in range(shape[0]):
 Import the writer and utilities:
 
 ```python
-from bioio_ome_zarr.writers import (
-    OmeZarrWriterV2,
-    chunk_size_from_memory_target,
-    compute_level_shapes,
-    compute_level_chunk_sizes_zslice,
-    resize,
-)
+from bioio_ome_zarr.writers import OmeZarrWriterV3, Channel, spatial_downsample
 import numpy as np
-import dask.array as da
 ```
 
-### Utility Examples from Tests
+### Utility Example: spatial\_downsample
 
 ```python
-# Downsample a 5D array (T,C,Z,Y,X)
-data = np.arange(16, dtype=np.uint8).reshape((1,1,1,4,4))
-factors = (1,1,1,2,2)
-out = downsample_data(data, factors)
-# out.shape == (1,1,1,2,2)
+# Downsample a 5D array (T,C,Z,Y,X) over Y and X by factor 2
+data = np.arange(16, dtype=np.uint8).reshape((1, 1, 1, 4, 4))
+factors = (1, 1, 1, 2, 2)
+out = spatial_downsample(data, ["t", "c", "z", "y", "x"], factors)
+# out.shape == (1, 1, 1, 2, 2)
 ```
 
-```python
-# Build axes metadata
-names = ["t","c","z"]
-types = ["time","channel","space"]
-units = [None, None, "um"]
-axes = default_axes(names, types, units)
-# axes == [{'name':'t','type':'time'}, {'name':'c','type':'channel'}, {'name':'z','type':'space','unit':'um'}]
-```
-
-### Pyramid Shape Computation and Chunking
+### Pyramid Shape Computation and Chunk Suggestions
 
 ```python
-# Compute level shapes
-shape = (1,1,1,128,128)
+# Compute level shapes without writing any data
+shape = (1, 1, 1, 128, 128)
 writer = OmeZarrWriterV3(
     store="output_v3.zarr",
     shape=shape,
     dtype=np.uint8,
-    scale_factors=(1,1,1,2,2),
+    scale_factors=(1, 1, 1, 2, 2),
     num_levels=2,
 )
 out_shapes = writer._compute_levels(2)
 # out_shapes == [(1,1,1,128,128), (1,1,1,64,64)]
 
-# Suggest default chunks for large level
-ck = writer._suggest_chunks((1,1,1,5000,5000))
-# ck == (1,1,1,4096,4096)
-
-# Shard and chunk parameters clamp per level
-shape_small = (1,1,1,4,4)
-writer2 = OmeZarrWriterV3(
-    store="output_v3_shard.zarr",
-    shape=shape_small,
-    dtype=np.uint8,
-    chunks=(1,1,1,2,2),
-    shards=(1,1,2,2,2)
-)
-# writer2.chunks and writer2.shards align with level_shapes
+# Suggest default chunks for a large spatial level
+ck = writer._suggest_chunks((1, 1, 1, 5000, 5000))
+# ck might be (1,1,1,4096,4096)
 ```
 
 ### Writing Full Volume and Metadata
 
 ```python
-# Write full 5D volume to a fixed output location
-shape = (2,3,4,8,8)
-data = np.random.randint(0,255,size=shape,dtype=np.uint8)
+# Write a full 5D volume into a Zarr store
+shape = (2, 3, 4, 8, 8)
+data = np.random.randint(0, 255, size=shape, dtype=np.uint8)
+
+# Build Channel objects for each C dimension
+channels = [
+    Channel(label=f"c{i}", color="FF0000") for i in range(shape[1])
+]
 
 writer = OmeZarrWriterV3(
     store="output_full_volume.zarr",
     shape=shape,
     dtype=data.dtype,
-    axes_names=["t","c","z","y","x"],
-    axes_types=["time","channel","space","space","space"],
-    axes_units=[None,None,None,"um","um"],
-    axes_scale=[1,1,1,0.5,0.5],
-    scale_factors=(1,1,2,2,2),
+    axes_names=["t", "c", "z", "y", "x"],
+    axes_types=["time", "channel", "space", "space", "space"],
+    axes_units=[None, None, None, "um", "um"],
+    axes_scale=[1.0, 1.0, 1.0, 0.5, 0.5],
+    scale_factors=(1, 1, 2, 2, 2),
     num_levels=3,
-    chunks=(1,1,1,4,4),
-    shards=(1,1,2,2,2),
-    channel_names=[f"c{i}" for i in range(shape[1])],
-    channel_colors=["FF0000"]*shape[1],
-    creator_info={"name":"test","version":"0.1"},
+    chunks=(1, 1, 1, 4, 4),
+    shards=(1, 1, 2, 2, 2),
+    channels=channels,
+    creator_info={"name": "test", "version": "0.1"},
 )
 writer.write_full_volume(data)
 ```
@@ -243,15 +220,42 @@ writer.write_full_volume(data)
 ### Writing Single Timepoints
 
 ```python
-# Write one timepoint at a time to fixed output
-shape = (3,2,2,4,4)
-data = np.random.randint(0,255,size=shape,dtype=np.uint8)
+# Write one timepoint at a time into a Zarr store
+shape = (3, 2, 2, 4, 4)
+data = np.random.randint(0, 255, size=shape, dtype=np.uint8)
 
+# Use default axes if not specified
 writer = OmeZarrWriterV3(store="output_timepoints.zarr", shape=shape, dtype=data.dtype)
+
 for t in range(shape[0]):
-    frame = data[t]  # 4D (C,Z,Y,X)
+    frame = data[t]  # shape (C,Z,Y,X)
     writer.write_timepoint(t, frame)
 ```
+
+### Including a Top‑Level Scale Transform
+
+Include a coordinate transformation, pass it as
+`multiscale_scale`:
+
+```python
+# Suppose level-0 scale = [0.1, 0.1, 0.1, 0.1, 0.1]
+scale0 = [0.1, 0.1, 0.1, 0.1, 0.1]
+
+writer = OmeZarrWriterV3(
+    store="output_with_scale.zarr",
+    shape=(1, 1, 1, 4, 4),
+    dtype="uint8",
+    axes_names=["t", "c", "z", "y", "x"],
+    axes_types=["time", "channel", "space", "space", "space"],
+    axes_units=[None, None, "µm", "µm", "µm"],
+    axes_scale=scale0,
+    scale_factors=(1, 1, 1, 2, 2),
+    num_levels=None,
+    multiscale_scale=scale0,
+)
+# Writing data as usual ...
+```
+
 
 ## Issues
 [_Click here to view all open issues in bioio-devs organization at once_](https://github.com/search?q=user%3Abioio-devs+is%3Aissue+is%3Aopen&type=issues&ref=advsearch) or check this repository's issue tab.
