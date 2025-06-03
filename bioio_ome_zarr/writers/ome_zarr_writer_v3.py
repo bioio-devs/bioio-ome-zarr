@@ -5,242 +5,163 @@ import numpy as np
 import zarr
 from zarr.codecs import BloscCodec, BloscShuffle
 
+from .axes import Axes
+from .channel import Channel
 
-def downsample_data(
-    data: np.ndarray, factors: Tuple[int, int, int, int, int]
+
+def spatial_downsample(
+    data: np.ndarray,
+    axes_names: List[str],
+    scale_factors: Tuple[int, ...],
 ) -> np.ndarray:
     """
-    Downsample a 5D array (T, C, Z, Y, X) by integer factors for Z, Y, X.
-
-    Parameters
-    ----------
-    data : np.ndarray
-        The input 5D array (T, C, Z, Y, X).
-    factors : Tuple[int, int, int, int, int]
-        Downsampling factors (t_factor, c_factor ignored, zf, yf, xf).
-
-    Returns
-    -------
-    np.ndarray
-        Downsampled array.
+    Downsample `data` only over X and Y axes (axes named "x" or "y"),
+    by their corresponding factor in `scale_factors`. All other axes unchanged.
     """
-    # TODO: There is probably a much more efficent way to do this
+    names_lower = [n.lower() for n in axes_names]
+    shape = data.shape
 
-    # Only spatial downsampling (time & channel stay intact)
-    zf, yf, xf = factors[2], factors[3], factors[4]
-    T, C, Z, Y, X = data.shape
+    crop_slices: List[Union[slice, int]] = []
+    reshape_dims: List[int] = []
+    factor_axes: List[int] = []
+    new_dim_idx = 0
 
-    # Clamp to avoid factors > dimension
-    zf, yf, xf = min(zf, Z), min(yf, Y), min(xf, X)
+    for i, dim_size in enumerate(shape):
+        ax_name = names_lower[i]
+        f = scale_factors[i]
 
-    # Compute how many full blocks fit
-    nz, ny, nx = Z // zf, Y // yf, X // xf
+        if ax_name in ("x", "y") and f > 1 and dim_size >= f:
+            full = (dim_size // f) * f
+            crop_slices.append(slice(0, full))
+            reshape_dims.extend([full // f, f])
+            factor_axes.append(new_dim_idx + 1)
+            new_dim_idx += 2
+        else:
+            crop_slices.append(slice(None))
+            reshape_dims.append(dim_size)
+            new_dim_idx += 1
 
-    # Trim off remainders so reshape works
-    d = data[..., : nz * zf, : ny * yf, : nx * xf]
+    data_cropped = data[tuple(crop_slices)]
+    data_reshaped = data_cropped.reshape(tuple(reshape_dims))
+    downsampled = data_reshaped.mean(axis=tuple(factor_axes))
 
-    # Reshape into blocks and average
-    # new shape: (T,C,nz,zf,ny,yf,nx,xf)
-    d = d.reshape(T, C, nz, zf, ny, yf, nx, xf)
-    out = d.mean(axis=(3, 5, 7))
-
-    # Round back if integer
-    if not np.issubdtype(data.dtype, np.floating):
-        out = np.rint(out).astype(data.dtype)
-    return out
+    return downsampled
 
 
-def default_axes(
-    names: List[str], types: List[str], units: List[Optional[str]]
-) -> List[dict]:
+class OMEZarrWriterV3:
     """
-    Build axes metadata list from provided names, types, and units.
-
-    Parameters
-    ----------
-    names : List[str]
-        Axis names.
-    types : List[str]
-        Axis types.
-    units : List[Optional[str]]
-        Axis units (or None).
-
-    Returns
-    -------
-    List[dict]
-        List of axis metadata dictionaries.
-    """
-
-    # TODO: should this be a constant or a util or something?
-    axes = []
-    for n, t, u in zip(names, types, units):
-        entry = {"name": n, "type": t}
-        if u:
-            entry["unit"] = u
-        axes.append(entry)
-    return axes
-
-
-class OMEZarrWriter:
-    """
-    OMEZarrWriter is a fully compliant OME-Zarr v0.5.0 writer built
-    on Zarr v3 stores.
+    OMEZarrWriterV3 is a fully compliant OME-Zarr v0.5.0 writer built
+    on Zarr v3 stores. It supports writing inputs of dimensionality
+    2 ≤ N ≤ 5 (e.g., YX, ZYX, TYX, CZYX, or TCZYX).
     """
 
     def __init__(
         self,
         store: Union[str, zarr.storage.StoreLike],
-        shape: Tuple[int, int, int, int, int],
+        shape: Tuple[int, ...],
         dtype: Union[np.dtype, str],
-        axes_names: List[str] = ["t", "c", "z", "y", "x"],
-        axes_types: List[str] = ["time", "channel", "space", "space", "space"],
-        axes_units: List[Optional[str]] = [None, None, None, None, None],
-        axes_scale: List[float] = [1.0, 1.0, 1.0, 1.0, 1.0],
-        scale_factors: Tuple[int, int, int, int, int] = (1, 1, 2, 2, 2),
+        axes_names: Optional[List[str]] = None,
+        axes_types: Optional[List[str]] = None,
+        axes_units: Optional[List[Optional[str]]] = None,
+        axes_scale: Optional[List[float]] = None,
+        scale_factors: Optional[Tuple[int, ...]] = None,
         num_levels: Optional[int] = None,
         chunks: Union[str, Tuple[int, ...], List[Tuple[int, ...]]] = "auto",
         shards: Optional[Union[Tuple[int, ...], List[Tuple[int, ...]]]] = None,
         compressor: Optional[BloscCodec] = None,
         image_name: str = "Image",
-        channel_names: Optional[List[str]] = None,
-        channel_colors: Optional[List[str]] = None,
+        channels: Optional[List[Channel]] = None,
+        rdefs: Optional[dict] = None,
         creator_info: Optional[dict] = None,
+        multiscale_scale: Optional[List[float]] = None,
     ):
         """
-        Initialize writer and automatically build axes and channel metadata.
+        Initialize writer and build axes + channel metadata automatically.
 
-        Parameters
-        ----------
-        store : Union[str, zarr.storage.StoreLike]
-            Path or Zarr Store for output.
-        shape : Tuple[int, int, int, int, int]
-            Base image shape (T, C, Z, Y, X).
-        dtype : Union[np.dtype, str]
-            NumPy dtype of the image data.
-        axes_names : List[str]
-            Axis names.
-        axes_types : List[str]
-            Axis types.
-        axes_units : List[Optional[str]]
-            Axis units.
-        axes_scale : List[float]
-            Physical scale per axis.
-        scale_factors : Tuple[int, int, int, int, int]
-            Downsampling factors per axis.
-        num_levels : Optional[int]
-            Maximum number of pyramid levels.
-        chunks : Union[str, Tuple[int, ...], List[Tuple[int, ...]]]
-            Chunk specification or "auto".
-        shards : Optional[Union[Tuple[int, ...], List[Tuple[int, ...]]]]
-            Shard specification.
-        compressor : Optional[BloscCodec]
-            Compressor codec to use.
-        image_name : str
-            Name for multiscale metadata.
-        channel_names : Optional[List[str]]
-            Channel labels.
-        channel_colors : Optional[List[str]]
-            Channel hex colors.
-        creator_info : Optional[dict]
-            Creator metadata.
+        Added parameter:
+          multiscale_scale: Optional[List[float]]
+            If provided, will be inserted as a top-level
+            scale transform under each multiscale entry.
         """
+        # 1) Store fundamental properties
         self.shape = tuple(shape)
         self.dtype = np.dtype(dtype)
-        self.axes_scale = axes_scale
-        self.scale_factors = scale_factors
-        # Multiscale shapes
+        self.ndim = len(self.shape)
+
+        # 2) Build an Axes instance (handles default slicing internally)
+        self.axes = Axes(
+            ndim=self.ndim,
+            names=axes_names,
+            types=axes_types,
+            units=axes_units,
+            scales=axes_scale,
+            factors=scale_factors,
+        )
+
+        # 3) Compute all possible pyramid level shapes
         self.level_shapes = self._compute_levels(num_levels)
-        # Chunks & shards
+
+        # 4) Record actual number of levels
+        self.num_levels = len(self.level_shapes)
+
+        # 5) Prepare chunk & shard parameters per level
         self.chunks = self._prepare_parameter(chunks, self._suggest_chunks, "chunks")
         self.shards = self._prepare_parameter(
             shards, lambda s: s, "shards", required=False
         )
-        # Zarr store & arrays
+
+        # 6) Initialize Zarr store and create arrays for each level
         self.root = self._init_store(store)
         self.datasets = self._create_arrays(compressor)
 
-        # Build metadata
-        axes_meta = default_axes(axes_names, axes_types, axes_units)
-        channel_meta = None
-        if channel_names or channel_colors:
-            C = shape[1]
-            channel_meta = []
-            default_colors = [
-                "FF0000",
-                "00FF00",
-                "0000FF",
-                "FFFF00",
-                "FF00FF",
-                "00FFFF",
-            ]
-            for i in range(C):
-                color = (
-                    channel_colors[i]
-                    if channel_colors and i < len(channel_colors)
-                    else default_colors[i % len(default_colors)]
-                )
-                label = (
-                    channel_names[i]
-                    if channel_names and i < len(channel_names)
-                    else f"Channel {i}"
-                )
-                info = (
-                    np.iinfo(self.dtype)
-                    if np.issubdtype(self.dtype, np.integer)
-                    else None
-                )
-                win_min, win_max = (
-                    (int(info.min), int(info.max)) if info else (0.0, 1.0)
-                )
-                ch = {
-                    "active": True,
-                    "coefficient": 1.0,
-                    "color": color,
-                    "family": "linear",
-                    "window": {
-                        "min": float(win_min),
-                        "max": float(win_max),
-                        "start": float(win_min),
-                        "end": float(win_max),
-                    },
-                    "label": label,
-                }
-                channel_meta.append(ch)
+        # 7) Convert Channel objects to raw dicts (if provided)
+        if channels is not None:
+            self.channels = [ch.to_dict() for ch in channels]
+        else:
+            self.channels: Optional[List[Dict[str, Any]]] = None  # type: ignore
 
-        # Write metadata
-        self._write_metadata(image_name, axes_meta, channel_meta, creator_info)
+        # 8) Store OMERO render settings verbatim
+        self.rdefs = rdefs
+
+        # 9) Capture optional top‐level scale transform
+        self.multiscale_scale = multiscale_scale
+
+        # 10) Build axes metadata list from the Axes helper
+        axes_meta = self.axes.to_metadata()
+
+        # 11) Write the OME-Zarr metadata (multiscales + OMERO + creator)
+        self._write_metadata(
+            name=image_name,
+            axes=axes_meta,
+            channels=self.channels,
+            rdefs=self.rdefs,
+            creator=creator_info,
+        )
 
     def _compute_levels(self, max_levels: Optional[int]) -> List[Tuple[int, ...]]:
         """
-        Calculate all multiresolution level shapes by repeatedly scaling.
-        Minimum dimension size will always be 1 and stops when no further reduction
-        or at max_levels.
-
-        Parameters
-        ----------
-        max_levels : Optional[int]
-            Number of levels to compute (including base level).
-            None for full descent.
-
-        Returns
-        -------
-        List[Tuple[int, ...]]
-            List of 5D shape tuples for each pyramid level.
+        Calculate multiresolution level shapes by repeatedly scaling X and Y axes.
+        Only X and Y axes get downsampled; all other axes remain fixed.
         """
-        shapes = [self.shape]
+        shapes: List[Tuple[int, ...]] = [self.shape]
         lvl = 1
+
         while max_levels is None or lvl < max_levels:
             prev = shapes[-1]
-            nxt = tuple(
-                max(1, prev[i] // self.scale_factors[i])
-                if i >= 2 and self.scale_factors[i] > 1
-                else prev[i]
-                for i in range(5)
-            )
-            if nxt == prev:
+            nxt: List[int] = []
+            for i, size in enumerate(prev):
+                ax_name = self.axes.names[i].lower()
+                factor = self.axes.factors[i]
+                if ax_name in ("x", "y") and factor > 1:
+                    nxt.append(max(1, size // factor))
+                else:
+                    nxt.append(size)
+            nxt_tuple = tuple(nxt)
+            if nxt_tuple == prev:
                 break
-            shapes.append(nxt)
+            shapes.append(nxt_tuple)
             lvl += 1
+
         return shapes
 
     def _prepare_parameter(
@@ -252,51 +173,25 @@ class OMEZarrWriter:
     ) -> List[Optional[Tuple[int, ...]]]:
         """
         Standardize chunk or shard specification across levels.
-
-        Parameters
-        ----------
-        param : Union[str, Tuple[int, ...], List[Tuple[int, ...]], None]
-            "auto", None, a tuple, or list of tuples per level.
-        default_fn : Callable
-            Function to generate default value for a level.
-        name : str
-            Parameter name ("chunks" or "shards").
-        required : bool
-            If False, None is allowed and yields None per level
-
-        Returns
-        -------
-        List[Optional[Tuple[int, ...]]]
-            List of parameter tuples (or None) per level.
         """
-
-        # TODO: This function kinda sucks, needs better
         levels = len(self.level_shapes)
 
-        # Auto-chunk only applies when name == "chunks"
         if param == "auto" and name == "chunks":
             return [default_fn(s) for s in self.level_shapes]
 
         if param is None:
             if not required:
                 return [None] * levels
-            # repeat the default tuple for every level
             default = default_fn(self.level_shapes[0])
             return [default] * levels
 
-        # Normalize into a list of length `levels`
-        items: List[Tuple[int, ...]]
         if isinstance(param, list):
             items = param
         else:
             items = [param] * levels
 
-        if len(items) != levels:
-            raise ValueError(f"Length of {name} list must be {levels}")
-
-        # Clamp each item to the level shape
         return [
-            tuple(min(items[i][d], self.level_shapes[i][d]) for d in range(5))
+            tuple(min(items[i][d], self.level_shapes[i][d]) for d in range(self.ndim))
             for i in range(levels)
         ]
 
@@ -304,18 +199,8 @@ class OMEZarrWriter:
     def _init_store(store: Union[str, zarr.storage.StoreLike]) -> zarr.Group:
         """
         Create or open a Zarr group at the given store location.
-
-        Parameters
-        ----------
-        store : Union[str, zarr.storage.StoreLike]
-            Path or Store object for output.
-
-        Returns
-        -------
-        zarr.Group
-            The root Zarr group for writing.
         """
-        if isinstance(store, str) and "://" in store:  # TODO: make this a better check
+        if isinstance(store, str) and "://" in store:
             fs = zarr.storage.FsspecStore(store, mode="w")
             return zarr.group(store=fs, overwrite=True)
         return zarr.group(store=store, overwrite=True)
@@ -323,16 +208,6 @@ class OMEZarrWriter:
     def _create_arrays(self, resolver: Optional[BloscCodec]) -> List[zarr.Array]:
         """
         Create Zarr arrays for each multiscale level in the root group.
-
-        Parameters
-        ----------
-        compressor : Optional[BloscCodec]
-            Compressor codec to apply to chunks.
-
-        Returns
-        -------
-        List[zarr.Array]
-            Zarr array objects for each level.
         """
         comp = resolver or BloscCodec(
             cname="zstd", clevel=3, shuffle=BloscShuffle.bitshuffle
@@ -342,7 +217,6 @@ class OMEZarrWriter:
             chunks_lvl = self.chunks[lvl]
             shards_lvl = self.shards[lvl]
             if chunks_lvl is not None and shards_lvl is not None:
-                # safe to zip two tuples
                 shards_param = tuple(c * s for c, s in zip(chunks_lvl, shards_lvl))
             else:
                 shards_param = None
@@ -363,118 +237,131 @@ class OMEZarrWriter:
         name: str,
         axes: List[dict],
         channels: Optional[List[dict]],
+        rdefs: Optional[dict],
         creator: Optional[dict],
     ) -> None:
         """
-        Write the 'ome' attribute on the root group with multiscale, OMERO,
-        and creator metadata.
-
-        Parameters
-        ----------
-        name : str
-            Image name for metadata.
-        axes : List[dict]
-            Axes metadata list.
-        channels : Optional[List[dict]]
-            OMERO channel metadata list.
-        creator : Optional[dict]
-            Creator metadata dictionary.
-
-        Returns
-        -------
-        None
+        Write the 'ome' attribute on the root group with NGFF v0.5 metadata.
         """
-        multiscale: Dict[str, Any] = {
-            "version": "0.5",
-            "name": name,
-            "axes": axes,
-            "datasets": [
+        # Build per‐level datasets list
+        datasets_list: List[dict] = []
+        for lvl in range(self.num_levels):
+            scale_vals: List[float] = []
+            for ax_i in range(self.ndim):
+                if self.axes.types[ax_i] == "space":
+                    scale_vals.append(
+                        self.axes.scales[ax_i] * (self.axes.factors[ax_i] ** lvl)
+                    )
+                else:
+                    scale_vals.append(1.0)
+            datasets_list.append(
                 {
-                    "path": str(i),
+                    "path": str(lvl),
                     "coordinateTransformations": [
-                        {
-                            "type": "scale",
-                            "scale": [
-                                self.axes_scale[j]
-                                * (self.scale_factors[j] ** i if j >= 2 else 1)
-                                for j in range(len(self.shape))
-                            ],
-                        }
+                        {"type": "scale", "scale": scale_vals}
                     ],
                 }
-                for i in range(len(self.level_shapes))
-            ],
+            )
+
+        # Build the multiscale entry
+        multiscale_entry: Dict[str, Any] = {"name": name or ""}
+
+        # If a top-level scale is provided, insert it here:
+        if self.multiscale_scale is not None:
+            multiscale_entry["coordinateTransformations"] = [
+                {"type": "scale", "scale": self.multiscale_scale}
+            ]
+
+        multiscale_entry["axes"] = axes
+        multiscale_entry["datasets"] = datasets_list
+
+        ome_block: Dict[str, Any] = {
+            "version": "0.5",
+            "multiscales": [multiscale_entry],
         }
-        ome: Dict[str, Any] = {"multiscales": [multiscale], "version": "0.5"}
-        if channels:
-            ome["omero"] = {"version": "0.5", "channels": channels}
+
+        if channels is not None:
+            omero_block: Dict[str, Any] = {"version": "0.5", "channels": channels}
+            if rdefs is not None:
+                omero_block["rdefs"] = rdefs
+            ome_block["omero"] = omero_block
+
         if creator:
-            ome["_creator"] = creator
-        self.root.attrs.update({"ome": ome})
+            ome_block["_creator"] = creator
+
+        self.root.attrs.update({"ome": ome_block})
 
     def _suggest_chunks(self, shape: Tuple[int, ...]) -> Tuple[int, ...]:
         """
-        Suggest chunk shapes targeting ~64MB per chunk based on level shape.
-
-        Parameters
-        ----------
-        shape : Tuple[int, ...]
-            5D shape of the multiscale level.
-
-        Returns
-        -------
-        Tuple[int, ...]
-            Chunk sizes (t, c, z, y, x).
+        Suggest chunk shapes aiming for ~64MB per chunk, based on dtype and shape.
+        Only "space" axes get larger chunks; non-"space" axes → 1.
         """
         bpe = self.dtype.itemsize
-        maxe = (64 << 20) // bpe
-        base = int(math.sqrt(maxe))
-        y = min(shape[3], base)
-        x = min(shape[4], maxe // y) or 1
-        z = min(shape[2], max(1, maxe // (y * x)))
-        return (1, 1, z, y, x)
+        maxe = (64 << 20) // bpe  # max elements ≈ 64MB
+
+        spatial_idxs = [i for i, t in enumerate(self.axes.types) if t == "space"]
+        chunk = [1] * self.ndim
+
+        if len(spatial_idxs) == 1:
+            i0 = spatial_idxs[0]
+            chunk[i0] = min(shape[i0], maxe)
+
+        elif len(spatial_idxs) == 2:
+            iY, iX = spatial_idxs[-2], spatial_idxs[-1]
+            y_size, x_size = shape[iY], shape[iX]
+            base = int(math.sqrt(maxe))
+            chunk_x = min(x_size, base)
+            chunk_y = min(y_size, max(1, maxe // chunk_x))
+            chunk[iX] = chunk_x
+            chunk[iY] = chunk_y
+
+        elif len(spatial_idxs) == 3:
+            iZ, iY, iX = spatial_idxs[-3], spatial_idxs[-2], spatial_idxs[-1]
+            z_size, y_size, x_size = shape[iZ], shape[iY], shape[iX]
+            base = int(math.sqrt(maxe))
+            chunk_x = min(x_size, base)
+            chunk_y = min(y_size, max(1, maxe // chunk_x))
+            chunk_z = min(z_size, max(1, maxe // (chunk_x * chunk_y)))
+            chunk[iX] = chunk_x
+            chunk[iY] = chunk_y
+            chunk[iZ] = chunk_z
+
+        return tuple(chunk)
 
     def write_full_volume(self, data: np.ndarray) -> None:
         """
-        Write an entire 5D image (T, C, Z, Y, X) into the Zarr store at all levels.
-
-        Parameters
-        ----------
-        data : np.ndarray
-            Full-resolution 5D image array.
-
-        Returns
-        -------
-        None
+        Write an entire image volume into the multiscale pyramid.
         """
-        assert data.shape == self.shape, "Input data shape must match base shape"
-        self.datasets[0][:] = data
+        self.datasets[0][...] = data
         cur = data
-        for i in range(1, len(self.level_shapes)):
-            dn = downsample_data(cur, self.scale_factors)
-            self.datasets[i][:] = dn
-            cur = dn
+        for lvl in range(1, self.num_levels):
+            cur = spatial_downsample(cur, self.axes.names, self.axes.factors)
+            self.datasets[lvl][...] = cur
 
     def write_timepoint(self, t_index: int, data_t: np.ndarray) -> None:
         """
-        Write a single timepoint (C, Z, Y, X) across all pyramid levels.
-
-        Parameters
-        ----------
-        t_index : int
-            Index of the timepoint to write.
-        data_t : np.ndarray
-            4D image array (C, Z, Y, X) for the given timepoint.
-
-        Returns
-        -------
-        None
+        Write a single timepoint slice into the multiscale pyramid.
         """
-        expected = (self.shape[1], self.shape[2], self.shape[3], self.shape[4])
-        assert data_t.shape == expected, f"data_t must have shape {expected}"
-        self.datasets[0][t_index, :, :, :, :] = data_t
-        cur = data_t[np.newaxis, ...]
-        for i in range(1, len(self.level_shapes)):
-            dn = downsample_data(cur, self.scale_factors)
-            self.datasets[i][t_index, :, :, :, :] = dn[0]
-            cur = dn
+        # Find the index of the "t" axis
+        axis_t = [i for i, n in enumerate(self.axes.names) if n.lower() == "t"][0]
+
+        # Build a selector for level 0: List[Union[slice, int]]
+        sel0: List[Union[slice, int]] = [slice(None)] * self.ndim
+        sel0[axis_t] = t_index  # type: ignore[index]  # int into Union[slice,int]
+        self.datasets[0][tuple(sel0)] = data_t
+
+        # Expand dims at the time axis for downsampling
+        block = np.expand_dims(data_t, axis=axis_t)
+
+        for lvl in range(1, self.num_levels):
+            block = spatial_downsample(block, self.axes.names, self.axes.factors)
+
+            # Build a selector to extract the single frame from the expanded block
+            sl_sngl: List[Union[slice, int]] = [slice(None)] * self.ndim
+            sl_sngl[axis_t] = 0  # type: ignore[index]
+            slice_data = block[tuple(sl_sngl)]
+
+            # Now build a selector to place that slice into level 'lvl'
+            sel_lvl: List[Union[slice, int]] = [slice(None)] * self.ndim
+            sel_lvl[axis_t] = t_index  # type: ignore[index]
+            self.datasets[lvl][tuple(sel_lvl)] = slice_data
