@@ -20,6 +20,5 @@ __all__ = [
     "compute_level_shapes",
     "compute_level_chunk_sizes_zslice",
     "resize",
-    "default_axes",
     "spatial_downsample",
 ]
