@@ -3,8 +3,12 @@ from typing import Any, Dict, Optional
 
 class Channel:
     """
-    Helper to construct an OMERO-style channel metadata dict with minimal arguments.
-    Only `label` and `color` are required. Window defaults to 0–255.
+    Helper to construct an OMERO-style channel metadata dict, compliant with
+    the NGFF OME-Zarr 0.5.0 OMERO block specification
+    (see https://ngff.openmicroscopy.org/latest/#omero-md).
+
+    Only `label` and `color` are required; all other parameters have sensible defaults.
+    Window defaults to 0–255.
     """
 
     def __init__(

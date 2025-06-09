@@ -3,7 +3,11 @@ from typing import List, Optional, Tuple
 
 class Axes:
     """
-    Holds axis metadata for an N-D image. After init:
+    Holds axis metadata for an N-D image, in accordance with
+    the NGFF OME-Zarr 0.5.0 metadata specification for axes
+    (see https://ngff.openmicroscopy.org/latest/#axes-md).
+
+    After initialization:
       - names   is length N
       - types   is length N
       - units   is length N
@@ -15,7 +19,8 @@ class Axes:
     DEFAULT_TYPES: List[str] = ["time", "channel", "space", "space", "space"]
     DEFAULT_UNITS: List[Optional[str]] = [None, None, None, None, None]
     DEFAULT_SCALES: List[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
-    # Z is not downsampled by default
+    # We do not downsample the Z dimension by default because most Z-stacks
+    # contain far fewer slices than XY pixels and the XY resolution is much finer.
     DEFAULT_FACTORS: Tuple[int, int, int, int, int] = (1, 1, 1, 2, 2)
 
     def __init__(

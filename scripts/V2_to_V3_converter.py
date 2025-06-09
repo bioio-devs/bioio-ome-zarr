@@ -5,6 +5,8 @@ import numpy as np
 import zarr
 from bioio_ome_zarr.writers import Channel, OmeZarrWriterV3
 
+# NOTE: This script will load image completely into memory and is not meant for large files 
+
 # Replace with your actual paths:
 input_store = "/Users/brian.whitney/Desktop/Repos/bioio-ome-zarr/bioio_ome_zarr/tests/resources/dimension_handling_tyx.zarr"
 output_store = "/Users/brian.whitney/Desktop/Repos/bioio-ome-zarr/bioio_ome_zarr/tests/resources/dimension_handling_tyx_V3.zarr"

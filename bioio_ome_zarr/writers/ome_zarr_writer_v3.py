@@ -46,7 +46,7 @@ class OMEZarrWriterV3:
         store : Union[str, zarr.storage.StoreLike]
             Path or Zarr store-like object for the output group.
         shape : Tuple[int, ...]
-            Base image shape (e.g. (Y, X), (Z, Y, X), (T, C, Z, Y, X)).
+            image shape (e.g. (2, 2), (1, 4, 3), (2, 3, 4, 5, 6)).
         dtype : Union[np.dtype, str]
             NumPy dtype of the image data (e.g. "uint8").
         axes_names : Optional[List[str]]
