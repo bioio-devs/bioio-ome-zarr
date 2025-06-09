@@ -1,64 +1,17 @@
 import json
 import shutil
 import tempfile
-from typing import Any
+from typing import Any, List, Tuple
 
+import dask.array as da
 import numpy as np
 import pytest
 import zarr
 from ngff_zarr.validate import validate
 
-from bioio_ome_zarr.writers import Channel, OmeZarrWriterV3, spatial_downsample
+from bioio_ome_zarr.writers import Channel, OmeZarrWriterV3
 
 from ..conftest import LOCAL_RESOURCES_DIR
-
-
-@pytest.mark.parametrize(
-    "data_shape, axes_names, scale_factors, expected, expected_shape",
-    [
-        # 2D: shape=(4,4), axes ["y","x"], downsample each by 2 → (2,2)
-        (
-            (4, 4),
-            ["y", "x"],
-            (2, 2),
-            np.array([[2, 4], [10, 12]], dtype=np.uint8),
-            (2, 2),
-        ),
-        # 3D: shape=(1,4,4), axes ["z","y","x"], only Y,X downsample by 2 → (1,2,2)
-        (
-            (1, 4, 4),
-            ["z", "y", "x"],
-            (1, 2, 2),
-            np.array([[[2, 4], [10, 12]]], dtype=np.uint8),
-            (1, 2, 2),
-        ),
-        # 5D: shape=(1,1,1,4,4), only Y,X downsample by 2 → (1,1,1,2,2)
-        (
-            (1, 1, 1, 4, 4),
-            ["t", "c", "z", "y", "x"],
-            (1, 1, 1, 2, 2),
-            np.array([[[[[2, 4], [10, 12]]]]], dtype=np.uint8),
-            (1, 1, 1, 2, 2),
-        ),
-    ],
-)
-def test_spatial_downsample(
-    data_shape: Any,
-    axes_names: Any,
-    scale_factors: Any,
-    expected: Any,
-    expected_shape: Any,
-) -> None:
-    # Arrange
-    data = np.arange(int(np.prod(data_shape)), dtype=np.uint8).reshape(data_shape)
-
-    # Act
-    out = spatial_downsample(data, axes_names, scale_factors)
-
-    # Assert
-    assert out.shape == expected_shape
-    rounded = np.rint(out).astype(expected.dtype)
-    np.testing.assert_array_equal(rounded, expected)
 
 
 @pytest.mark.parametrize(
@@ -332,57 +285,109 @@ def test_metadata_against_reference(
 
 
 @pytest.mark.parametrize(
-    "shape, axes_names, axes_types, scale_factors",
+    "shape, axes_names, axes_types, factors, chunks, shards",
     [
-        ((2, 4, 4), ["t", "y", "x"], ["time", "space", "space"], (1, 2, 2)),
-        ((3, 6, 6), ["t", "y", "x"], ["time", "space", "space"], (1, 3, 3)),
+        (
+            (2, 4, 4),
+            ["t", "y", "x"],
+            ["time", "space", "space"],
+            (1, 2, 2),
+            (1, 2, 2),
+            (1, 1, 1),
+        ),
+        (
+            (3, 6, 6),
+            ["t", "y", "x"],
+            ["time", "space", "space"],
+            (1, 3, 3),
+            (1, 2, 2),
+            (1, 1, 1),
+        ),
+        (
+            (2, 128, 128),
+            ["t", "y", "x"],
+            ["time", "space", "space"],
+            (1, 4, 4),
+            (1, 32, 32),
+            (1, 2, 2),
+        ),
+        (
+            (2, 2, 4, 128, 128),
+            ["t", "c", "z", "y", "x"],
+            ["time", "channel", "space", "space", "space"],
+            (1, 1, 2, 4, 4),
+            (1, 1, 2, 32, 32),
+            (1, 1, 1, 2, 2),
+        ),
     ],
 )
-def test_write_timepoint_vs_full_volume(
+def test_full_vs_timepoint_equivalence(
     tmp_path: Any,
-    shape: Any,
-    axes_names: Any,
-    axes_types: Any,
-    scale_factors: Any,
+    shape: Tuple[int, ...],
+    axes_names: List[str],
+    axes_types: List[str],
+    factors: Tuple[int, ...],
+    chunks: Tuple[int, ...],
+    shards: Tuple[int, ...],
 ) -> None:
     """
-    Verify writing each timepoint individually yields the same multiscale result
-    as writing the full volume at once.
+    Writing full volume vs per-timepoint yields identical multiscale Zarrs,
+    preserving data, chunk, and shard layouts, including axis metadata.
     """
     # Arrange
-    full_data = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
-    store_full = str(tmp_path / "full_volume.zarr")
-    writer_full = OmeZarrWriterV3(
-        store=store_full,
-        shape=shape,
-        dtype="uint8",
-        axes_names=axes_names,
-        axes_types=axes_types,
-        scale_factors=scale_factors,
-        num_levels=None,
-    )
+    data = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
+    full_store = str(tmp_path / "full.zarr")
+    tp_store = str(tmp_path / "tp.zarr")
 
-    store_tp = str(tmp_path / "timepoints.zarr")
-    writer_tp = OmeZarrWriterV3(
-        store=store_tp,
+    w_full = OmeZarrWriterV3(
+        store=full_store,
         shape=shape,
-        dtype="uint8",
+        dtype=data.dtype,
         axes_names=axes_names,
         axes_types=axes_types,
-        scale_factors=scale_factors,
+        scale_factors=factors,
         num_levels=None,
+        chunks=chunks,
+        shards=shards,
+    )
+    w_tp = OmeZarrWriterV3(
+        store=tp_store,
+        shape=shape,
+        dtype=data.dtype,
+        axes_names=axes_names,
+        axes_types=axes_types,
+        scale_factors=factors,
+        num_levels=None,
+        chunks=chunks,
+        shards=shards,
     )
 
     # Act
-    writer_full.write_full_volume(full_data)
+    w_full.write_full_volume(data)
     for t in range(shape[0]):
-        writer_tp.write_timepoint(t, full_data[t])
+        slice_data = data[t]
+        slice_da = da.from_array(slice_data, chunks=chunks[1:])
+        w_tp.write_timepoint(t, slice_da)
 
     # Assert
-    grp_full = zarr.open(store_full, mode="r")
-    grp_tp = zarr.open(store_tp, mode="r")
-    for lvl in range(writer_full.num_levels):
+    grp_full = zarr.open(full_store, mode="r")
+    grp_tp = zarr.open(tp_store, mode="r")
+    for lvl, lvl_shape in enumerate(w_full.level_shapes):
         arr_full = grp_full[str(lvl)]
         arr_tp = grp_tp[str(lvl)]
-        assert arr_full.shape == arr_tp.shape
+
+        # 1) data equality
         np.testing.assert_array_equal(arr_full[...], arr_tp[...])
+
+        # 2) chunk layout
+        chunks0 = w_full.chunks[lvl]
+        assert chunks0 is not None
+        assert arr_full.chunks == chunks0
+        assert arr_tp.chunks == chunks0
+
+        # 3) shard layout
+        sf = w_full.shards[lvl]
+        assert sf is not None
+        expected_shard = tuple(chunks0[i] * sf[i] for i in range(len(lvl_shape)))
+        assert arr_full.shards == expected_shard
+        assert arr_tp.shards == expected_shard
