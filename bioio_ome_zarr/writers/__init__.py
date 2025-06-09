@@ -10,7 +10,6 @@ from .ome_zarr_writer_v2 import (
     resize,
 )
 from .ome_zarr_writer_v3 import OMEZarrWriterV3 as OmeZarrWriterV3
-from .ome_zarr_writer_v3 import spatial_downsample
 
 __all__ = [
     "Channel",
@@ -20,5 +19,4 @@ __all__ = [
     "compute_level_shapes",
     "compute_level_chunk_sizes_zslice",
     "resize",
-    "spatial_downsample",
 ]
