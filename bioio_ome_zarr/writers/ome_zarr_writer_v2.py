@@ -1,35 +1,21 @@
 import logging
-from dataclasses import asdict, dataclass
-from math import prod
-from typing import Any, List, Optional, Tuple, Union, cast
+from dataclasses import asdict
+from typing import List, Optional, Tuple, Union
 
 import dask.array as da
 import numcodecs
 import numpy as np
-import skimage.transform
 import zarr
 from ngff_zarr.zarr_metadata import Axis, Dataset, Metadata, Scale, Translation
 from zarr.storage import FsspecStore, LocalStore
 
 from bioio_ome_zarr import Reader
 
+from .utils import DimTuple, ZarrLevel, resize
+
 log = logging.getLogger(__name__)
 
-DimTuple = Tuple[int, int, int, int, int]
-
 OME_NGFF_VERSION = "0.4"
-
-
-def chunk_size_from_memory_target(
-    shape: DimTuple, dtype: str, memory_target: int
-) -> DimTuple:
-    if len(shape) != 5:
-        raise ValueError("shape must be a 5-tuple in TCZYX order")
-    itemsize = np.dtype(dtype).itemsize
-    chunk_size: DimTuple = (1, 1, shape[2], shape[3], shape[4])
-    while prod(chunk_size) * itemsize > memory_target:
-        chunk_size = cast(DimTuple, tuple(max(s // 2, 1) for s in chunk_size))
-    return chunk_size
 
 
 def dim_tuple_to_dict(
@@ -38,36 +24,6 @@ def dim_tuple_to_dict(
     if len(dims) != 5:
         raise ValueError("dims must be a 5-tuple in TCZYX order")
     return {k: v for k, v in zip(("t", "c", "z", "y", "x"), dims)}
-
-
-def resize(
-    image: da.Array, output_shape: Tuple[int, ...], *args: Any, **kwargs: Any
-) -> da.Array:
-    factors = np.array(output_shape) / np.array(image.shape, float)
-    better_chunksize = tuple(
-        np.maximum(1, np.ceil(np.array(image.chunksize) * factors) / factors).astype(
-            int
-        )
-    )
-    image_prepared = image.rechunk(better_chunksize)
-
-    block_output_shape = tuple(
-        np.ceil(np.array(better_chunksize) * factors).astype(int)
-    )
-
-    def resize_block(image_block: da.Array, block_info: dict) -> da.Array:
-        chunk_output_shape = tuple(
-            np.ceil(np.array(image_block.shape) * factors).astype(int)
-        )
-        return skimage.transform.resize(
-            image_block, chunk_output_shape, *args, **kwargs
-        ).astype(image_block.dtype)
-
-    output_slices = tuple(slice(0, d) for d in output_shape)
-    output = da.map_blocks(
-        resize_block, image_prepared, dtype=image.dtype, chunks=block_output_shape
-    )[output_slices]
-    return output.rechunk(image.chunksize).astype(image.dtype)
 
 
 def _pop_metadata_optionals(metadata_dict: dict) -> dict:
@@ -112,49 +68,6 @@ def build_ome(
         "rdefs": {"defaultT": 0, "defaultZ": size_z // 2, "model": "color"},
     }
     return omero
-
-
-@dataclass
-class ZarrLevel:
-    shape: DimTuple
-    chunk_size: DimTuple
-    dtype: np.dtype
-    zarray: zarr.Array
-
-
-def compute_level_shapes(
-    lvl0shape: DimTuple, scaling: Tuple[float, float, float, float, float], nlevels: int
-) -> List[DimTuple]:
-    shapes = [lvl0shape]
-    for _ in range(nlevels - 1):
-        prev = shapes[-1]
-        nextshape = cast(
-            DimTuple, tuple(max(int(prev[i] / scaling[i]), 1) for i in range(5))
-        )
-        shapes.append(nextshape)
-    return shapes
-
-
-def get_scale_ratio(
-    level0: Tuple[int, ...], level1: Tuple[int, ...]
-) -> Tuple[float, ...]:
-    return tuple(level0[i] / level1[i] for i in range(len(level0)))
-
-
-def compute_level_chunk_sizes_zslice(shapes: List[DimTuple]) -> List[DimTuple]:
-    chunk_sizes = [(1, 1, 1, shapes[0][3], shapes[0][4])]
-    for i in range(1, len(shapes)):
-        scale = get_scale_ratio(shapes[i - 1], shapes[i])
-        prev = chunk_sizes[i - 1]
-        new: DimTuple = (
-            1,
-            1,
-            int(scale[4] * scale[3] * prev[2]),
-            int(prev[3] / scale[3]),
-            int(prev[4] / scale[4]),
-        )
-        chunk_sizes.append(new)
-    return chunk_sizes
 
 
 class OMEZarrWriter:

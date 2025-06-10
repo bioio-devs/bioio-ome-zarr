@@ -1,5 +1,4 @@
-import math
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -8,7 +7,7 @@ from zarr.codecs import BloscCodec, BloscShuffle
 
 from .axes import Axes
 from .channel import Channel
-from .ome_zarr_writer_v2 import resize
+from .utils import chunk_size_from_memory_target, compute_level_shapes, resize
 
 
 class OMEZarrWriterV3:
@@ -29,7 +28,7 @@ class OMEZarrWriterV3:
         axes_scale: Optional[List[float]] = None,
         scale_factors: Optional[Tuple[int, ...]] = None,
         num_levels: Optional[int] = None,
-        chunks: Union[str, Tuple[int, ...], List[Tuple[int, ...]]] = "auto",
+        chunks: Optional[Union[Tuple[int, ...], List[Tuple[int, ...]]]] = None,
         shards: Optional[Union[Tuple[int, ...], List[Tuple[int, ...]]]] = None,
         compressor: Optional[BloscCodec] = None,
         image_name: str = "Image",
@@ -46,27 +45,26 @@ class OMEZarrWriterV3:
         store : Union[str, zarr.storage.StoreLike]
             Path or Zarr store-like object for the output group.
         shape : Tuple[int, ...]
-            image shape (e.g. (2, 2), (1, 4, 3), (2, 3, 4, 5, 6)).
+            Image shape (e.g. (2, 2), (1, 4, 3), (2, 3, 4, 5, 6)).
         dtype : Union[np.dtype, str]
             NumPy dtype of the image data (e.g. "uint8").
         axes_names : Optional[List[str]]
-            Names of each axis, len = len(shape). Defaults to last N of
-            ["t", "c", "z", "y", "x"].
+            Names of each axis; defaults to last N of ["t","c","z","y","x"].
         axes_types : Optional[List[str]]
-            Types of each axis (e.g. ["time", "channel", "space"...]).
+            Types of each axis (e.g. ["time","channel","space"]).
         axes_units : Optional[List[Optional[str]]]
             Physical units for each axis (e.g. ["ms", None, "µm"]).
         axes_scale : Optional[List[float]]
             Physical scale per axis at base resolution.
         scale_factors : Optional[Tuple[int, ...]]
-            Integer downsampling factors per axis (e.g. (1, 1, 2, 2)).
+            Integer downsampling factors per axis (e.g. (1,1,2,2)).
         num_levels : Optional[int]
-            Number of pyramid levels to generate. If None, compute until
-            no further reduction.
-        chunks : Union[str, Tuple[int, ...], List[Tuple[int, ...]]]
-            Chunk sizes: "auto" or a tuple or list per level.
-        shards : Optional[Union[Tuple[int, ...], List[Tuple[int, ...]]]]
-            Shard factors per level. None for no sharding.
+            Number of pyramid levels to generate;
+            if None, compute until no further reduction.
+        chunks : Optional[Union[Tuple[int,...], List[Tuple[int,...]]]]
+            Chunk sizes per level or tuple for all levels; "auto" behavior is legacy.
+        shards : Optional[Union[Tuple[int,...], List[Tuple[int,...]]]]
+            Shard factors per level; None disables sharding.
         compressor : Optional[BloscCodec]
             Zarr compressor to use (default: Blosc Zstd).
         image_name : str
@@ -74,13 +72,11 @@ class OMEZarrWriterV3:
         channels : Optional[List[Channel]]
             OMERO-style channel metadata objects.
         rdefs : Optional[dict]
-            OMERO rendering settings (passed under "omero" → "rdefs").
+            OMERO rendering settings (under "omero" → "rdefs").
         creator_info : Optional[dict]
-            Creator metadata dictionary (e.g.
-            {"name":"pytest","version":"0.1"}).
+            Creator metadata (e.g. {"name":"pytest","version":"0.1"}).
         multiscale_scale : Optional[List[float]]
-            Optional top-level scale transform (list of floats). Inserted
-            under "coordinateTransformations" of the multiscale block.
+            Top-level scale transform under coordinateTransformations.
         """
         # 1) Store fundamental properties
         self.shape = tuple(shape)
@@ -98,16 +94,47 @@ class OMEZarrWriterV3:
         )
 
         # 3) Compute all pyramid level shapes
-        self.level_shapes = self._compute_levels(num_levels)
+        # Uses shared compute_level_shapes utility
+        self.level_shapes = compute_level_shapes(
+            self.shape, self.axes.names, self.axes.factors, num_levels
+        )
 
         # 4) Record actual number of levels
         self.num_levels = len(self.level_shapes)
 
         # 5) Prepare chunk & shard parameters per level
-        self.chunks = self._prepare_parameter(chunks, self._suggest_chunks, "chunks")
-        self.shards = self._prepare_parameter(
-            shards, lambda s: s, "shards", required=False
-        )
+        # Chunks: legacy auto via chunk_size_from_memory_target
+        self.chunks: List[Tuple[int, ...]] = []
+        if chunks is None:
+            self.chunks = [
+                chunk_size_from_memory_target(s, self.dtype, 16 << 20)
+                for s in self.level_shapes
+            ]
+        elif isinstance(chunks, tuple):
+            self.chunks = [chunks] * self.num_levels
+        elif isinstance(chunks, list):
+            if len(chunks) != self.num_levels:
+                raise ValueError(
+                    f"Expected {self.num_levels} chunk tuples, got {len(chunks)}"
+                )
+            self.chunks = chunks
+        else:
+            raise ValueError("Invalid `chunks` specification")
+
+        # Shards: optional list or None per level
+        self.shards: Sequence[Optional[Tuple[int, ...]]] = []
+        if shards is None:
+            self.shards = [None] * self.num_levels
+        elif isinstance(shards, tuple):
+            self.shards = [shards] * self.num_levels
+        elif isinstance(shards, list):
+            if len(shards) != self.num_levels:
+                raise ValueError(
+                    f"Expected {self.num_levels} shard tuples, got {len(shards)}"
+                )
+            self.shards = shards
+        else:
+            raise ValueError("Invalid `shards` specification")
 
         # 6) Initialize Zarr store and create arrays for each level
         self.root = self._init_store(store)
@@ -136,100 +163,6 @@ class OMEZarrWriterV3:
             rdefs=self.rdefs,
             creator=creator_info,
         )
-
-    def _compute_levels(self, max_levels: Optional[int]) -> List[Tuple[int, ...]]:
-        """
-        Compute pyramid level shapes by repeatedly downsampling spatial axes.
-
-        Parameters
-        ----------
-        max_levels : Optional[int]
-            Maximum number of levels (including base). If None, generate
-            until downsampled shape equals previous.
-
-        Returns
-        -------
-        List[Tuple[int, ...]]
-            List of shape tuples for each level.
-
-        Notes
-        -----
-        * Only axes named "x" or "y" get downsampled by `scale_factors`.
-        * Stops early if new shape equals the last shape.
-        """
-        shapes: List[Tuple[int, ...]] = [self.shape]
-        lvl = 1
-
-        while max_levels is None or lvl < max_levels:
-            prev = shapes[-1]
-            nxt: List[int] = []
-            for i, size in enumerate(prev):
-                ax_name = self.axes.names[i].lower()
-                factor = self.axes.factors[i]
-                if ax_name in ("x", "y") and factor > 1:
-                    nxt.append(max(1, size // factor))
-                else:
-                    nxt.append(size)
-            nxt_tuple = tuple(nxt)
-            if nxt_tuple == prev:
-                break
-            shapes.append(nxt_tuple)
-            lvl += 1
-
-        return shapes
-
-    def _prepare_parameter(
-        self,
-        param: Any,
-        default_fn: Callable[[Tuple[int, ...]], Tuple[int, ...]],
-        name: str,
-        required: bool = True,
-    ) -> List[Optional[Tuple[int, ...]]]:
-        """
-        Standardize chunk or shard specification across levels.
-
-        Parameters
-        ----------
-        param : Any
-            Either "auto", None, a single tuple, or a list of tuples.
-        default_fn : Callable[[Tuple[int, ...]], Tuple[int, ...]]
-            Function to generate a default chunk size for a given shape.
-        name : str
-            "chunks" or "shards".
-        required : bool
-            If False and param is None, returns [None] * num_levels.
-
-        Returns
-        -------
-        List[Optional[Tuple[int, ...]]]
-            List of tuples per level or [None,...] if not required.
-
-        Notes
-        -----
-        * "auto" + name="chunks" → apply default_fn to each level’s shape.
-        * None + required=True → apply default_fn on base level and replicate.
-        * If param is a tuple or list, ensure length matches num_levels.
-        """
-        levels = len(self.level_shapes)
-
-        if param == "auto" and name == "chunks":
-            return [default_fn(s) for s in self.level_shapes]
-
-        if param is None:
-            if not required:
-                return [None] * levels
-            default = default_fn(self.level_shapes[0])
-            return [default] * levels
-
-        if isinstance(param, list):
-            items = param
-        else:
-            items = [param] * levels
-
-        return [
-            tuple(min(items[i][d], self.level_shapes[i][d]) for d in range(self.ndim))
-            for i in range(levels)
-        ]
 
     @staticmethod
     def _init_store(store: Union[str, zarr.storage.StoreLike]) -> zarr.Group:
@@ -320,7 +253,6 @@ class OMEZarrWriterV3:
           "coordinateTransformations" of the multiscale entry.
         * Updates self.root.attrs["ome"] with the assembled block.
         """
-        # Build per-level datasets list
         datasets_list: List[dict] = []
         for lvl in range(self.num_levels):
             scale_vals: List[float] = []
@@ -340,10 +272,7 @@ class OMEZarrWriterV3:
                 }
             )
 
-        # Build the multiscale entry
         multiscale_entry: Dict[str, Any] = {"name": name or ""}
-
-        # Insert top-level scale transform if provided
         if self.multiscale_scale is not None:
             multiscale_entry["coordinateTransformations"] = [
                 {"type": "scale", "scale": self.multiscale_scale}
@@ -368,52 +297,6 @@ class OMEZarrWriterV3:
 
         self.root.attrs.update({"ome": ome_block})
 
-    def _suggest_chunks(self, shape: Tuple[int, ...]) -> Tuple[int, ...]:
-        """
-        Suggest chunk shapes aiming for ~64MB per chunk.
-
-        Only "space" axes get larger chunks; non-"space" axes → 1.
-
-        Parameters
-        ----------
-        shape : Tuple[int, ...]
-            The shape of the array at the current level.
-
-        Returns
-        -------
-        Tuple[int, ...]
-            A tuple of chunk sizes for each axis.
-
-        Notes
-        -----
-        * Handles cases where there are exactly 2 or 3 spatial axes.
-        * Allocates roughly sqrt(max elements) along X first, then Y,
-          then Z.
-        """
-        bpe = self.dtype.itemsize
-        maxe = (64 << 20) // bpe  # max elements ≈ 64MB
-
-        spatial_idxs = [i for i, t in enumerate(self.axes.types) if t == "space"]
-        chunk = [1] * self.ndim
-
-        if len(spatial_idxs) in (2, 3):
-            remaining = maxe
-            base = int(math.sqrt(maxe))
-            first = True
-
-            # Assign X, then Y, then Z (if present)
-            for idx in reversed(spatial_idxs):
-                size = shape[idx]
-                if first:
-                    val = min(size, base)
-                    first = False
-                else:
-                    val = min(size, max(1, remaining))
-                chunk[idx] = val
-                remaining //= val
-
-        return tuple(chunk)
-
     def write_full_volume(self, data: Union[np.ndarray, da.Array]) -> None:
         """
         Write an entire image volume into the multiscale pyramid using Dask or
@@ -423,6 +306,7 @@ class OMEZarrWriterV3:
         ----------
         data : Union[np.ndarray, dask.array.Array]
             Full-resolution volume matching self.shape
+
         Notes
         -----
         * If `data` is a Dask array, uses it directly; otherwise wraps the NumPy
@@ -430,7 +314,6 @@ class OMEZarrWriterV3:
         * Uses `dask.array.store` to persist into the pre-created Zarr arrays,
           preserving chunk and shard settings.
         """
-        # Wrap or reuse input as a Dask array
         if isinstance(data, da.Array):
             darr = data
         else:
@@ -438,7 +321,6 @@ class OMEZarrWriterV3:
             assert chunk0 is not None
             darr = da.from_array(data, chunks=chunk0)
 
-        # Store each pyramid level
         for lvl, target_shape in enumerate(self.level_shapes):
             if lvl > 0:
                 darr = resize(darr, target_shape)

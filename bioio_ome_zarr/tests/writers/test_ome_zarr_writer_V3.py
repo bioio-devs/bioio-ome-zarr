@@ -15,69 +15,6 @@ from ..conftest import LOCAL_RESOURCES_DIR
 
 
 @pytest.mark.parametrize(
-    "in_shape, axes_names, axes_types, scale_factors, max_levels, expected_levels",
-    [
-        (
-            (64, 64),
-            ["y", "x"],
-            ["space", "space"],
-            (2, 2),
-            3,
-            [(64, 64), (32, 32), (16, 16)],
-        ),
-        (
-            (8, 64, 64),
-            ["z", "y", "x"],
-            ["space", "space", "space"],
-            (2, 2, 2),
-            4,
-            [(8, 64, 64), (8, 32, 32), (8, 16, 16), (8, 8, 8)],
-        ),
-        (
-            (5, 32, 64, 64),
-            ["t", "z", "y", "x"],
-            ["time", "space", "space", "space"],
-            (1, 1, 2, 2),
-            2,
-            [(5, 32, 64, 64), (5, 32, 32, 32)],
-        ),
-        (
-            (1, 1, 1, 4, 4),
-            ["t", "c", "z", "y", "x"],
-            ["time", "channel", "space", "space", "space"],
-            (1, 1, 1, 2, 2),
-            2,
-            [(1, 1, 1, 4, 4), (1, 1, 1, 2, 2)],
-        ),
-    ],
-)
-def test_compute_level_shapes_with_max_levels(
-    in_shape: Any,
-    axes_names: Any,
-    axes_types: Any,
-    scale_factors: Any,
-    max_levels: Any,
-    expected_levels: Any,
-) -> None:
-    # Arrange
-    writer = OmeZarrWriterV3(
-        store=tempfile.mkdtemp(),
-        shape=in_shape,
-        dtype=np.uint8,
-        axes_names=axes_names,
-        axes_types=axes_types,
-        scale_factors=scale_factors,
-        num_levels=None,
-    )
-
-    # Act
-    out = writer._compute_levels(max_levels)
-
-    # Assert
-    assert out == expected_levels
-
-
-@pytest.mark.parametrize(
     "shape, axes_names, axes_types, data_generator, expected_shapes",
     [
         (

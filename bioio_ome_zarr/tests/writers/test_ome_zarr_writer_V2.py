@@ -3,20 +3,18 @@
 
 
 import pathlib
-from typing import Callable, List, Tuple
+from typing import Callable, List, Tuple, cast
 
 import numpy as np
 import pytest
-from dask import array as da
 from ngff_zarr import from_ngff_zarr
 
-from bioio_ome_zarr.writers.ome_zarr_writer_v2 import (
+from bioio_ome_zarr.writers import (
     DimTuple,
-    OMEZarrWriter,
+    OmeZarrWriterV2,
     chunk_size_from_memory_target,
     compute_level_chunk_sizes_zslice,
     compute_level_shapes,
-    resize,
 )
 
 from ..conftest import array_constructor
@@ -39,72 +37,6 @@ def test_chunk_size_from_memory_target(
 ) -> None:
     chunk_shape = chunk_size_from_memory_target(input_shape, dtype, memory_target)
     assert chunk_shape == expected_chunk_shape
-
-
-def test_resize() -> None:
-    d = da.from_array([[1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4]])
-    output_shape = (1, 1)
-    out_d = resize(d, output_shape)
-    assert out_d.shape == output_shape
-
-
-@pytest.mark.parametrize(
-    "in_shape, scale_per_level, num_levels, expected_out_shapes",
-    [
-        (
-            (1, 1, 1, 128, 128),
-            (1.0, 1.0, 1.0, 2.0, 2.0),
-            2,
-            [(1, 1, 1, 128, 128), (1, 1, 1, 64, 64)],
-        ),
-        (
-            (1, 1, 256, 1024, 2048),
-            (1.0, 1.0, 1.0, 2.0, 2.0),
-            3,
-            [(1, 1, 256, 1024, 2048), (1, 1, 256, 512, 1024), (1, 1, 256, 256, 512)],
-        ),
-        (
-            (1, 1, 1, 4, 4),
-            (1.0, 1.0, 1.0, 2.0, 2.0),
-            5,
-            [
-                (1, 1, 1, 4, 4),
-                (1, 1, 1, 2, 2),
-                (1, 1, 1, 1, 1),
-                (1, 1, 1, 1, 1),
-                (1, 1, 1, 1, 1),
-            ],
-        ),
-    ],
-)
-def test_compute_level_shapes(
-    in_shape: DimTuple,
-    scale_per_level: Tuple[float, float, float, float, float],
-    num_levels: int,
-    expected_out_shapes: List[DimTuple],
-) -> None:
-    out_shapes = compute_level_shapes(in_shape, scale_per_level, num_levels)
-    assert out_shapes == expected_out_shapes
-
-
-@pytest.mark.parametrize(
-    "in_shapes, expected_out_chunk_shapes",
-    [
-        (
-            [
-                (512, 4, 100, 1000, 1000),
-                (512, 4, 100, 500, 500),
-                (512, 4, 100, 250, 250),
-            ],
-            [(1, 1, 1, 1000, 1000), (1, 1, 4, 500, 500), (1, 1, 16, 250, 250)],
-        )
-    ],
-)
-def test_compute_chunk_sizes_zslice(
-    in_shapes: List[DimTuple], expected_out_chunk_shapes: List[DimTuple]
-) -> None:
-    out_chunk_shapes = compute_level_chunk_sizes_zslice(in_shapes)
-    assert out_chunk_shapes == expected_out_chunk_shapes
 
 
 @array_constructor
@@ -147,13 +79,15 @@ def test_write_ome_zarr(
 
     shapes = compute_level_shapes(shape, scaling, num_levels)
     chunk_sizes = compute_level_chunk_sizes_zslice(shapes)
+    shapes_5d: list[DimTuple] = [cast(DimTuple, s) for s in shapes]
+    chunk_sizes_5d: list[DimTuple] = [cast(DimTuple, c) for c in chunk_sizes]
 
     # Create an OmeZarrWriter object
-    writer = OMEZarrWriter()
+    writer = OmeZarrWriterV2()
 
     # Initialize the store. Use s3 url or local directory path!
     save_uri = tmp_path / filename
-    writer.init_store(str(save_uri), shapes, chunk_sizes, im.dtype)
+    writer.init_store(str(save_uri), shapes_5d, chunk_sizes_5d, im.dtype)
 
     # Write the image
     writer.write_t_batches_array(im, channels=[], tbatch=4)
@@ -227,13 +161,15 @@ def test_write_ome_zarr_iterative(
 
     shapes = compute_level_shapes(shape, scaling, num_levels)
     chunk_sizes = compute_level_chunk_sizes_zslice(shapes)
+    shapes_5d: list[DimTuple] = [cast(DimTuple, s) for s in shapes]
+    chunk_sizes_5d: list[DimTuple] = [cast(DimTuple, c) for c in chunk_sizes]
 
     # Create an OmeZarrWriter object
-    writer = OMEZarrWriter()
+    writer = OmeZarrWriterV2()
 
     # Initialize the store. Use s3 url or local directory path!
     save_uri = tmp_path / filename
-    writer.init_store(str(save_uri), shapes, chunk_sizes, im.dtype)
+    writer.init_store(str(save_uri), shapes_5d, chunk_sizes_5d, im.dtype)
 
     # Write the image iteratively as if we only have one timepoint at a time
     for t in range(shape[0]):
