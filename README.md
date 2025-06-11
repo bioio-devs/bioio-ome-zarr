@@ -261,7 +261,7 @@ writer = OmeZarrWriterV3(
     axes_scale=scale0,
     scale_factors=(1,1,1,2,2),
     num_levels=None,
-    multiscale_scale=scale0,
+    root_transform= {"type":"scale","scale":scale0},
 )
 # then write data as above
 ```

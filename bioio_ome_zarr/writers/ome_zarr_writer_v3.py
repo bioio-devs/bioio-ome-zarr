@@ -35,7 +35,7 @@ class OMEZarrWriterV3:
         channels: Optional[List[Channel]] = None,
         rdefs: Optional[dict] = None,
         creator_info: Optional[dict] = None,
-        multiscale_scale: Optional[List[float]] = None,
+        root_transform: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize writer and build axes + channel metadata automatically.
@@ -75,8 +75,9 @@ class OMEZarrWriterV3:
             OMERO rendering settings (under "omero" → "rdefs").
         creator_info : Optional[dict]
             Creator metadata (e.g. {"name":"pytest","version":"0.1"}).
-        multiscale_scale : Optional[List[float]]
-            Top-level scale transform under coordinateTransformations.
+        root_transform : Optional[Dict[str, Any]]
+            Top-level multiscale coordinate transformation
+            (e.g. {"type":"scale","scale":[...]}).
         """
         # 1) Store fundamental properties
         self.shape = tuple(shape)
@@ -124,7 +125,7 @@ class OMEZarrWriterV3:
 
         # 9) Store OMERO render settings and top-level scale transform
         self.rdefs = rdefs
-        self.multiscale_scale = multiscale_scale
+        self.root_transform = root_transform
 
         # 10) Write the OME-Zarr metadata block
         axes_meta = self.axes.to_metadata()
@@ -134,6 +135,7 @@ class OMEZarrWriterV3:
             channels=self.channels,
             rdefs=self.rdefs,
             creator=creator_info,
+            root_transform=self.root_transform,
         )
 
     @staticmethod
@@ -201,6 +203,7 @@ class OMEZarrWriterV3:
         channels: Optional[List[dict]],
         rdefs: Optional[dict],
         creator: Optional[dict],
+        root_transform: Optional[Dict[str, Any]],
     ) -> None:
         """
         Write the 'ome' attribute with NGFF v0.5 metadata.
@@ -217,6 +220,8 @@ class OMEZarrWriterV3:
             OMERO render settings, under "omero" → "rdefs".
         creator : Optional[dict]
             Creator metadata, stored under "_creator".
+        root_transform : Optional[Dict[str, Any]]
+            Top-level coordinate transformation for the multiscale.
 
         Notes
         -----
@@ -244,10 +249,8 @@ class OMEZarrWriterV3:
             )
 
         multiscale_entry: Dict[str, Any] = {"name": name or ""}
-        if self.multiscale_scale is not None:
-            multiscale_entry["coordinateTransformations"] = [
-                {"type": "scale", "scale": self.multiscale_scale}
-            ]
+        if root_transform is not None:
+            multiscale_entry["coordinateTransformations"] = [root_transform]
 
         multiscale_entry["axes"] = axes
         multiscale_entry["datasets"] = datasets_list
