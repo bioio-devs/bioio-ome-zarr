@@ -216,8 +216,8 @@ writer = OmeZarrWriterV3(
     axes_scale=[1.0,1.0,1.0,0.5,0.5],
     scale_factors=(1,1,2,2,2),
     num_levels=3,
-    chunks=(1,1,1,4,4),
-    shards=(1,1,2,2,2),
+    chunk_size=(1,1,1,4,4),
+    shard_factor=(1,1,2,2,2),
     channels=channels,
     creator_info={"name":"test","version":"0.1"},
 )
