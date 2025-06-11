@@ -23,7 +23,7 @@ def suggest_chunks(
     shape: Tuple[int, ...],
     dtype: Union[str, np.dtype],
     axis_types: List[str],
-    target_size: int = 16 << 20,
+    target_size: int = 16 << 20,  # 16 MB
 ) -> Tuple[int, ...]:
     """
     Suggest chunk shapes aiming for ~target_size bytes per chunk.
