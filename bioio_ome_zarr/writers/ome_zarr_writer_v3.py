@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -28,8 +28,8 @@ class OMEZarrWriterV3:
         axes_scale: Optional[List[float]] = None,
         scale_factors: Optional[Tuple[int, ...]] = None,
         num_levels: Optional[int] = None,
-        chunks: Optional[Union[Tuple[int, ...], List[Tuple[int, ...]]]] = None,
-        shards: Optional[Union[Tuple[int, ...], List[Tuple[int, ...]]]] = None,
+        chunk_size: Optional[Tuple[int, ...]] = None,
+        shard_factor: Optional[Tuple[int, ...]] = None,
         compressor: Optional[BloscCodec] = None,
         image_name: str = "Image",
         channels: Optional[List[Channel]] = None,
@@ -61,10 +61,10 @@ class OMEZarrWriterV3:
         num_levels : Optional[int]
             Number of pyramid levels to generate;
             if None, compute until no further reduction.
-        chunks : Optional[Union[Tuple[int,...], List[Tuple[int,...]]]]
-            Chunk sizes per level or tuple for all levels; "auto" behavior is legacy.
-        shards : Optional[Union[Tuple[int,...], List[Tuple[int,...]]]]
-            Shard factors per level; None disables sharding.
+        chunk_size : Optional[Tuple[int,...]]
+            Chunk size; None defaults to 16 mb chunk.
+        shards : Optional[Tuple[int,...]]
+            Shard factor; None disables sharding.
         compressor : Optional[BloscCodec]
             Zarr compressor to use (default: Blosc Zstd).
         image_name : str
@@ -94,68 +94,40 @@ class OMEZarrWriterV3:
         )
 
         # 3) Compute all pyramid level shapes
-        # Uses shared compute_level_shapes utility
         self.level_shapes = compute_level_shapes(
             self.shape, self.axes.names, self.axes.factors, num_levels
         )
-
         # 4) Record actual number of levels
         self.num_levels = len(self.level_shapes)
 
-        # 5) Prepare chunk & shard parameters per level
-        # Chunks: legacy auto via chunk_size_from_memory_target
-        self.chunks: List[Tuple[int, ...]] = []
-        if chunks is None:
-            self.chunks = [
-                chunk_size_from_memory_target(s, self.dtype, 16 << 20)
-                for s in self.level_shapes
-            ]
-        elif isinstance(chunks, tuple):
-            self.chunks = [chunks] * self.num_levels
-        elif isinstance(chunks, list):
-            if len(chunks) != self.num_levels:
-                raise ValueError(
-                    f"Expected {self.num_levels} chunk tuples, got {len(chunks)}"
-                )
-            self.chunks = chunks
+        # 5) Determine uniform chunk size tuple
+        if chunk_size is None:
+            # Legacy auto-suggest based on base level
+            self.chunk_size = chunk_size_from_memory_target(
+                self.level_shapes[0], self.dtype, 16 << 20
+            )
         else:
-            raise ValueError("Invalid `chunks` specification")
+            self.chunk_size = chunk_size
 
-        # Shards: optional list or None per level
-        self.shards: Sequence[Optional[Tuple[int, ...]]] = []
-        if shards is None:
-            self.shards = [None] * self.num_levels
-        elif isinstance(shards, tuple):
-            self.shards = [shards] * self.num_levels
-        elif isinstance(shards, list):
-            if len(shards) != self.num_levels:
-                raise ValueError(
-                    f"Expected {self.num_levels} shard tuples, got {len(shards)}"
-                )
-            self.shards = shards
-        else:
-            raise ValueError("Invalid `shards` specification")
+        # 6) Determine uniform shard factor tuple (optional)
+        self.shard_factor = shard_factor
 
-        # 6) Initialize Zarr store and create arrays for each level
+        # 7) Initialize Zarr store and create arrays for each level
         self.root = self._init_store(store)
         self.datasets = self._create_arrays(compressor)
 
-        # 7) Convert Channel objects to raw dicts (if provided)
+        # 8) Convert Channel objects to raw dicts (if provided)
         if channels is not None:
             self.channels = [ch.to_dict() for ch in channels]
         else:
             self.channels: Optional[List[Dict[str, Any]]] = None  # type: ignore
 
-        # 8) Store OMERO render settings verbatim
+        # 9) Store OMERO render settings and top-level scale transform
         self.rdefs = rdefs
-
-        # 9) Capture optional top-level scale transform
         self.multiscale_scale = multiscale_scale
 
-        # 10) Build axes metadata list
+        # 10) Write the OME-Zarr metadata block
         axes_meta = self.axes.to_metadata()
-
-        # 11) Write the OME-Zarr metadata block
         self._write_metadata(
             name=image_name,
             axes=axes_meta,
@@ -204,18 +176,18 @@ class OMEZarrWriterV3:
         )
         arrays: List[zarr.Array] = []
         for lvl, shape in enumerate(self.level_shapes):
-            chunks_lvl = self.chunks[lvl]
-            shards_lvl = self.shards[lvl]
-            if chunks_lvl is not None and shards_lvl is not None:
-                shards_param = tuple(c * s for c, s in zip(chunks_lvl, shards_lvl))
+            # Use uniform chunk_size and shard_factor
+            chunks = self.chunk_size
+            if self.shard_factor is not None:
+                shards = tuple(c * self.shard_factor[i] for i, c in enumerate(chunks))
             else:
-                shards_param = None
+                shards = None
 
             arr = self.root.create_array(
                 name=str(lvl),
                 shape=shape,
-                chunks=chunks_lvl,
-                shards=shards_param,
+                chunks=chunks,
+                shards=shards,
                 dtype=self.dtype,
                 compressors=comp,
             )
@@ -248,13 +220,12 @@ class OMEZarrWriterV3:
 
         Notes
         -----
-        * Builds "datasets" list, each with a per-level scale transform.
-        * If self.multiscale_scale is provided, inserts it under
-          "coordinateTransformations" of the multiscale entry.
-        * Updates self.root.attrs["ome"] with the assembled block.
+        * Builds datasets list, each with a per-level scale transform.
+        * Inserts top-level transform if provided.
+        * Updates self.root.attrs['ome'].
         """
         datasets_list: List[dict] = []
-        for lvl in range(self.num_levels):
+        for lvl, shape in enumerate(self.level_shapes):
             scale_vals: List[float] = []
             for ax_i in range(self.ndim):
                 if self.axes.types[ax_i] == "space":
@@ -297,34 +268,34 @@ class OMEZarrWriterV3:
 
         self.root.attrs.update({"ome": ome_block})
 
-    def write_full_volume(self, data: Union[np.ndarray, da.Array]) -> None:
+    def write_full_volume(self, input_data: Union[np.ndarray, da.Array]) -> None:
         """
         Write an entire image volume into the multiscale pyramid using Dask or
         NumPy input. Requires reading the full image into memory.
 
         Parameters
         ----------
-        data : Union[np.ndarray, dask.array.Array]
-            Full-resolution volume matching self.shape
+        input_data : Union[np.ndarray, dask.array.Array]
+            Full-resolution volume matching self.shape.
 
         Notes
         -----
-        * If `data` is a Dask array, uses it directly; otherwise wraps the NumPy
-          array with chunking at level-0 shapes.
+        * If `input_data` is a Dask array, uses it directly; otherwise wraps the NumPy
+          array with chunking at base level.
         * Uses `dask.array.store` to persist into the pre-created Zarr arrays,
           preserving chunk and shard settings.
         """
-        if isinstance(data, da.Array):
-            darr = data
+        # Wrap or reuse input as a Dask array
+        if isinstance(input_data, da.Array):
+            dask_array = input_data
         else:
-            chunk0 = self.chunks[0]
-            assert chunk0 is not None
-            darr = da.from_array(data, chunks=chunk0)
+            dask_array = da.from_array(input_data, chunks=self.chunk_size)
 
-        for lvl, target_shape in enumerate(self.level_shapes):
+        # Store each pyramid level
+        for lvl, shape in enumerate(self.level_shapes):
             if lvl > 0:
-                darr = resize(darr, target_shape)
-            da.store(darr, self.datasets[lvl], lock=True)
+                dask_array = resize(dask_array, shape)
+            da.store(dask_array, self.datasets[lvl], lock=True)
 
     def write_timepoint(
         self,
@@ -345,41 +316,26 @@ class OMEZarrWriterV3:
         Notes
         -----
         * Finds the "t" axis in self.axes.names.
-        * Preserves original chunk and shard settings on each Zarr array.
+        * Preserves uniform chunk_size and shard_factor settings on each Zarr array.
         """
-        from typing import List, Union
-
         # Locate the time axis
         axis_t = next(i for i, n in enumerate(self.axes.names) if n.lower() == "t")
-
-        # Prepare chunk tuple for spatial dims
-        chunk0 = self.chunks[0]
-        assert chunk0 is not None
-        spatial_chunks = chunk0[1:]
 
         # Wrap or reuse input as a Dask array with time axis
         if isinstance(data_t, da.Array):
             block = da.expand_dims(data_t, axis=axis_t)
         else:
             block = da.expand_dims(
-                da.from_array(data_t, chunks=spatial_chunks),
+                da.from_array(data_t, chunks=self.chunk_size[1:]),
                 axis=axis_t,
             )
 
-        # Compute and assign this slice and drop time axis
-        arr0 = block.compute()[0]
-        sel0: List[Union[slice, int]] = [slice(None)] * self.ndim
-        sel0[axis_t] = t_index
-        self.datasets[0][tuple(sel0)] = arr0
-
-        for lvl in range(1, self.num_levels):
-            # build target shape with time dim = 1
-            tgt = list(self.level_shapes[lvl])
-            tgt[axis_t] = 1
-
-            # resize returns a Dask array of shape (1, ... spatial dims)
-            block = resize(block, tuple(tgt))
-
+        # Compute and assign each pyramid level
+        for lvl in range(self.num_levels):
+            if lvl > 0:
+                level_shape = (1,) + self.level_shapes[lvl][1:]
+                # resize returns a Dask array of shape (1, ... spatial dims)
+                block = resize(block, level_shape)
             # compute only this downsampled slice and drop T
             arr = block.compute()[0]
 

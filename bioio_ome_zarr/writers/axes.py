@@ -5,7 +5,7 @@ class Axes:
     """
     Holds axis metadata for an N-D image, in accordance with
     the NGFF OME-Zarr 0.5.0 metadata specification for axes
-    (see https://ngff.openmicroscopy.org/latest/#axes-md).
+    (see https://ngff.openmicroscopy.org/0.5/#axes-md).
 
     After initialization:
       - names   is length N

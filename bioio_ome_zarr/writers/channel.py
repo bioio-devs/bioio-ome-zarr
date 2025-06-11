@@ -5,7 +5,7 @@ class Channel:
     """
     Helper to construct an OMERO-style channel metadata dict, compliant with
     the NGFF OME-Zarr 0.5.0 OMERO block specification
-    (see https://ngff.openmicroscopy.org/latest/#omero-md).
+    (see https://ngff.openmicroscopy.org/0.5/#omero-md).
 
     Only `label` and `color` are required; all other parameters have sensible defaults.
     Window defaults to 0–255.

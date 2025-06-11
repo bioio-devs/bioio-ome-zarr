@@ -55,11 +55,11 @@ from ..conftest import LOCAL_RESOURCES_DIR
     ],
 )
 def test_write_full_volume_and_metadata(
-    shape: Any,
+    shape: Tuple[int, ...],
     axes_names: Any,
     axes_types: Any,
     data_generator: Any,
-    expected_shapes: Any,
+    expected_shapes: List[Tuple[int, ...]],
 ) -> None:
     tmpdir = tempfile.mkdtemp()
     try:
@@ -98,7 +98,7 @@ def test_write_full_volume_and_metadata(
 
 
 @pytest.mark.parametrize(
-    "shape, chunks, shards",
+    "shape, chunk_size, shard_factor",
     [
         ((16, 16), (4, 4), (2, 2)),
         ((2, 16, 16), (1, 4, 4), (1, 2, 2)),
@@ -109,15 +109,19 @@ def test_write_full_volume_and_metadata(
 )
 def test_sharding_and_chunking_applied_to_arrays_high_dim(
     tmp_path: Any,
-    shape: Any,
-    chunks: Any,
-    shards: Any,
+    shape: Tuple[int, ...],
+    chunk_size: Tuple[int, ...],
+    shard_factor: Tuple[int, ...],
 ) -> None:
     # Arrange
     data = np.zeros(shape, dtype=np.uint8)
     store = str(tmp_path / "test_highdim.zarr")
     writer = OmeZarrWriterV3(
-        store=store, shape=shape, dtype=data.dtype, chunks=chunks, shards=shards
+        store=store,
+        shape=shape,
+        dtype=data.dtype,
+        chunk_size=chunk_size,
+        shard_factor=shard_factor,
     )
 
     # Act
@@ -127,20 +131,21 @@ def test_sharding_and_chunking_applied_to_arrays_high_dim(
     grp = zarr.open(store, mode="r")
     for lvl, lvl_shape in enumerate(writer.level_shapes):
         arr = grp[str(lvl)]
-        clamped_chunks = writer.chunks[lvl]
-        assert arr.chunks == clamped_chunks
+        # chunk_size is uniform
+        assert arr.chunks == writer.chunk_size
 
-        shard_factor = writer.shards[lvl]
-        assert shard_factor is not None
-        expected_shard_shape = tuple(
-            clamped_chunks[i] * shard_factor[i] for i in range(len(lvl_shape))
-        )
-        assert arr.shards == expected_shard_shape
+        # shard_factor is uniform
+        if writer.shard_factor is not None:
+            expected_shard_factor = tuple(
+                writer.chunk_size[i] * writer.shard_factor[i]
+                for i in range(len(lvl_shape))
+            )
+            assert arr.shards == expected_shard_factor
 
 
 @pytest.mark.parametrize(
     "shape, axes_names, axes_types, axes_units, axes_scale, scale_factors, "
-    "channel_kwargs, chunks, shards, filename",
+    "channel_kwargs, chunk_size, shard_factor, filename",
     [
         (
             (1, 1, 1, 4, 4),
@@ -185,8 +190,8 @@ def test_metadata_against_reference(
     axes_scale: Any,
     scale_factors: Any,
     channel_kwargs: Any,
-    chunks: Any,
-    shards: Any,
+    chunk_size: Any,
+    shard_factor: Any,
     filename: Any,
 ) -> None:
     # Arrange
@@ -203,8 +208,8 @@ def test_metadata_against_reference(
         axes_scale=axes_scale,
         scale_factors=scale_factors,
         num_levels=None,
-        chunks=chunks,
-        shards=shards,
+        chunk_size=chunk_size,
+        shard_factor=shard_factor,
         channels=[ch0],
         creator_info={"name": "pytest", "version": "0.1"},
     )
@@ -222,7 +227,7 @@ def test_metadata_against_reference(
 
 
 @pytest.mark.parametrize(
-    "shape, axes_names, axes_types, factors, chunks, shards",
+    "shape, axes_names, axes_types, factors, chunk_size, shard_factor",
     [
         (
             (2, 4, 4),
@@ -264,8 +269,8 @@ def test_full_vs_timepoint_equivalence(
     axes_names: List[str],
     axes_types: List[str],
     factors: Tuple[int, ...],
-    chunks: Tuple[int, ...],
-    shards: Tuple[int, ...],
+    chunk_size: Tuple[int, ...],
+    shard_factor: Tuple[int, ...],
 ) -> None:
     """
     Writing full volume vs per-timepoint yields identical multiscale Zarrs,
@@ -284,8 +289,8 @@ def test_full_vs_timepoint_equivalence(
         axes_types=axes_types,
         scale_factors=factors,
         num_levels=None,
-        chunks=chunks,
-        shards=shards,
+        chunk_size=chunk_size,
+        shard_factor=shard_factor,
     )
     w_tp = OmeZarrWriterV3(
         store=tp_store,
@@ -295,36 +300,32 @@ def test_full_vs_timepoint_equivalence(
         axes_types=axes_types,
         scale_factors=factors,
         num_levels=None,
-        chunks=chunks,
-        shards=shards,
+        chunk_size=chunk_size,
+        shard_factor=shard_factor,
     )
 
     # Act
     w_full.write_full_volume(data)
     for t in range(shape[0]):
         slice_data = data[t]
-        slice_da = da.from_array(slice_data, chunks=chunks[1:])
+        slice_da = da.from_array(slice_data, chunks=chunk_size[1:])
         w_tp.write_timepoint(t, slice_da)
 
     # Assert
     grp_full = zarr.open(full_store, mode="r")
     grp_tp = zarr.open(tp_store, mode="r")
-    for lvl, lvl_shape in enumerate(w_full.level_shapes):
+    for lvl, _ in enumerate(w_full.level_shapes):
         arr_full = grp_full[str(lvl)]
         arr_tp = grp_tp[str(lvl)]
 
-        # 1) data equality
+        # 1) Data equality
         np.testing.assert_array_equal(arr_full[...], arr_tp[...])
 
-        # 2) chunk layout
-        chunks0 = w_full.chunks[lvl]
-        assert chunks0 is not None
-        assert arr_full.chunks == chunks0
-        assert arr_tp.chunks == chunks0
+        # 2) Chunk layout
+        assert arr_full.chunks == chunk_size
+        assert arr_tp.chunks == chunk_size
 
-        # 3) shard layout
-        sf = w_full.shards[lvl]
-        assert sf is not None
-        expected_shard = tuple(chunks0[i] * sf[i] for i in range(len(lvl_shape)))
+        # 3) Shard layout
+        expected_shard = tuple(c * s for c, s in zip(chunk_size, shard_factor))
         assert arr_full.shards == expected_shard
         assert arr_tp.shards == expected_shard
