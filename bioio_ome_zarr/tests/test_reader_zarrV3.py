@@ -3,6 +3,7 @@ from typing import List, Tuple
 import numpy as np
 import pytest
 from bioio_base import dimensions, exceptions, test_utilities
+from ome_types import to_dict
 from zarr.core.group import GroupMetadata
 
 from bioio_ome_zarr import Reader
@@ -151,3 +152,91 @@ def test_ome_zarr_reader_v3(
         expected_metadata_type=GroupMetadata,
         reader_kwargs={},
     )
+
+
+@pytest.mark.parametrize(
+    "filename, expected_image_ids, expected_channel_ids, expected_hexes",
+    [
+        pytest.param(
+            "s1_t7_c4_z3_Image_0_V3.zarr",
+            ["Image:0"],
+            [f"Channel:{i}" for i in range(4)],
+            ["ff0000", "00ff00", "0000ff", "ffff00"],
+            id="full-dims-multi-channel",
+        ),
+        pytest.param(
+            "resolution_constant_zyx_V3.zarr",
+            [],
+            [],
+            [],
+            marks=pytest.mark.xfail(
+                reason="Unsupported dtype 'int64', expecting ValueError",
+                strict=False,
+            ),
+            id="zyx-int64-xfail",
+        ),
+    ],
+)
+def test_ome_metadata(
+    filename: str,
+    expected_image_ids: List[str],
+    expected_channel_ids: List[str],
+    expected_hexes: List[str],
+) -> None:
+    # Arrange
+    uri = LOCAL_RESOURCES_DIR / filename
+    reader = Reader(uri)
+
+    # Fail Case
+    if expected_image_ids is None:
+        with pytest.raises(ValueError):
+            _ = reader.ome_metadata
+        return
+
+    # Act
+    ome_first = reader.ome_metadata
+    ome_dict = to_dict(ome_first)
+    ch_meta = (
+        reader.metadata.attributes.get("ome", {}).get("omero", {}).get("channels", [])
+    )
+
+    # Assert
+    assert len(ome_dict["images"]) == len(expected_image_ids)
+
+    for idx, img in enumerate(ome_dict["images"]):
+        assert img["id"] == expected_image_ids[idx]
+        assert img["name"] == reader.scenes[idx]
+
+        pix = img["pixels"]
+        assert pix["dimension_order"].value == "XYZCT"
+
+        # Validate dimension sizes
+        assert pix["size_x"] == getattr(reader.dims, "X", 1)
+        assert pix["size_y"] == getattr(reader.dims, "Y", 1)
+        assert pix["size_z"] == getattr(reader.dims, "Z", 1)
+        assert pix["size_c"] == getattr(reader.dims, "C", 1)
+        assert pix["size_t"] == getattr(reader.dims, "T", 1)
+
+        # Validate pixel type
+        assert pix["type"].value == str(reader.dtype)
+
+        # Validate physical pixel sizes match reader.scale
+        assert pix["physical_size_x"] == reader.scale.X
+        assert pix["physical_size_y"] == reader.scale.Y
+        assert pix["physical_size_z"] == reader.scale.Z
+
+        # Validate channel properties
+        for ch_idx, ch in enumerate(pix["channels"]):
+            src = ch_meta[ch_idx]
+            assert ch["id"] == expected_channel_ids[ch_idx]
+            assert ch["name"] == src.get("label", "")
+            assert ch["color"]._original.lower() == expected_hexes[ch_idx]
+
+            contrast = ch.get("contrast_method") or []
+            if not src.get("active", True):
+                assert "Off" in contrast
+            if src.get("inverted", False):
+                assert "inverted" in contrast
+
+    # Assert reader state is restored
+    assert reader.current_scene_index == 0

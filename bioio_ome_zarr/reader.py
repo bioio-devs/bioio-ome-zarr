@@ -9,6 +9,8 @@ import xarray as xr
 import zarr
 from bioio_base import constants, dimensions, exceptions, io, reader, types
 from fsspec.spec import AbstractFileSystem
+from ome_types import OME
+from ome_types.model import Channel, Image, Pixels, PixelType
 from s3fs import S3FileSystem
 from zarr.core.group import GroupMetadata
 
@@ -37,6 +39,7 @@ class Reader(reader.Reader):
     _channel_names: Optional[List[str]] = None
     _scenes: Optional[Tuple[str, ...]] = None
     _zarr: zarr.Group
+    _ome_metadata: OME
 
     _fs: AbstractFileSystem
     _path: str
@@ -71,6 +74,12 @@ class Reader(reader.Reader):
         self._multiscales_metadata = self._zarr.attrs.get("ome", {}).get(
             "multiscales"
         ) or self._zarr.attrs.get("multiscales", [])
+
+        self._channel_metadata = (
+            self._zarr.attrs.get("ome", {}).get("omero", {}).get("channels")
+            or self._zarr.attrs.get("omero", {}).get("channels")
+            or []
+        )
 
     @staticmethod
     def _is_supported_image(
@@ -370,3 +379,75 @@ class Reader(reader.Reader):
             Y=scale_map.get(dimensions.DimensionNames.SpatialY),
             X=scale_map.get(dimensions.DimensionNames.SpatialX),
         )
+
+    @property
+    def ome_metadata(self) -> OME:
+        """
+        Build multi-scene OME object with one Image per scene.
+        Raises ValueError on unsupported dtype, because Pixels is required.
+        """
+        if hasattr(self, "_ome_metadata") and self._ome_metadata is not None:
+            return self._ome_metadata
+
+        # Dynamic PixelType lookup
+        dtype_key = str(self.dtype).upper()
+        try:
+            pixel_type_enum = PixelType[dtype_key]
+        except KeyError:
+            raise ValueError(
+                f"Unsupported dtype '{self.dtype}' for Pixels.type. "
+                "Cannot build OME metadata without a supported pixel type."
+            )
+
+        original_scene = self.current_scene_index
+        images = []
+
+        for idx, scene_id in enumerate(self.scenes):
+            self.set_scene(idx)
+
+            ch_meta = self._channel_metadata
+
+            size_x = getattr(self.dims, "X", 1)
+            size_y = getattr(self.dims, "Y", 1)
+            size_z = getattr(self.dims, "Z", 1)
+            size_c = getattr(self.dims, "C", 1)
+            size_t = getattr(self.dims, "T", 1)
+
+            channels = []
+            for i in range(size_c):
+                meta = ch_meta[i] if i < len(ch_meta) else {}
+                contrast = []
+                if not meta.get("active", True):
+                    contrast.append("Off")
+                if meta.get("inverted"):
+                    contrast.append("inverted")
+                channels.append(
+                    Channel(
+                        id=f"Channel:{i}",
+                        name=meta.get("label", f"Channel {i}"),
+                        color=meta.get("color"),
+                        contrast_method=contrast or None,
+                    )
+                )
+
+            pixels = Pixels(
+                id=f"Pixels:{idx}",
+                size_x=size_x,
+                size_y=size_y,
+                size_z=size_z,
+                size_c=size_c,
+                size_t=size_t,
+                type=pixel_type_enum,
+                dimension_order="XYZCT",
+                channels=channels,
+                physical_size_x=self.scale.X,
+                physical_size_y=self.scale.Y,
+                physical_size_z=self.scale.Z,
+                time_increment=None,
+            )
+
+            images.append(Image(id=f"Image:{idx}", name=scene_id, pixels=pixels))
+
+        self.set_scene(original_scene)
+        self._ome_metadata = OME(images=images)
+        return self._ome_metadata
