@@ -22,11 +22,11 @@ class OMEZarrWriterV3:
         store: Union[str, zarr.storage.StoreLike],
         shape: Tuple[int, ...],
         dtype: Union[np.dtype, str],
+        scale_factors: Tuple[int, ...],
         axes_names: Optional[List[str]] = None,
         axes_types: Optional[List[str]] = None,
         axes_units: Optional[List[Optional[str]]] = None,
         axes_scale: Optional[List[float]] = None,
-        scale_factors: Optional[Tuple[int, ...]] = None,
         num_levels: Optional[int] = None,
         chunk_size: Optional[Tuple[int, ...]] = None,
         shard_factor: Optional[Tuple[int, ...]] = None,
@@ -48,6 +48,8 @@ class OMEZarrWriterV3:
             Image shape (e.g. (2, 2), (1, 4, 3), (2, 3, 4, 5, 6)).
         dtype : Union[np.dtype, str]
             NumPy dtype of the image data (e.g. "uint8").
+        scale_factors : Tuple[int, ...]
+            Integer downsampling factors per axis (e.g. (1,1,2,2)).
         axes_names : Optional[List[str]]
             Names of each axis; defaults to last N of ["t","c","z","y","x"].
         axes_types : Optional[List[str]]
@@ -56,8 +58,6 @@ class OMEZarrWriterV3:
             Physical units for each axis (e.g. ["ms", None, "µm"]).
         axes_scale : Optional[List[float]]
             Physical scale per axis at base resolution.
-        scale_factors : Optional[Tuple[int, ...]]
-            Integer downsampling factors per axis (e.g. (1,1,2,2)).
         num_levels : Optional[int]
             Number of pyramid levels to generate;
             if None, compute until no further reduction.

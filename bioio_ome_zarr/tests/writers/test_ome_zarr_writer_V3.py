@@ -120,6 +120,7 @@ def test_sharding_and_chunking_applied_to_arrays_high_dim(
         store=store,
         shape=shape,
         dtype=data.dtype,
+        scale_factors=(1, 1, 1, 2, 2),
         chunk_size=chunk_size,
         shard_factor=shard_factor,
     )
