@@ -22,11 +22,11 @@ class OMEZarrWriterV3:
         store: Union[str, zarr.storage.StoreLike],
         shape: Tuple[int, ...],
         dtype: Union[np.dtype, str],
+        scale_factors: Tuple[int, ...],
         axes_names: Optional[List[str]] = None,
         axes_types: Optional[List[str]] = None,
         axes_units: Optional[List[Optional[str]]] = None,
         axes_scale: Optional[List[float]] = None,
-        scale_factors: Optional[Tuple[int, ...]] = None,
         num_levels: Optional[int] = None,
         chunk_size: Optional[Tuple[int, ...]] = None,
         shard_factor: Optional[Tuple[int, ...]] = None,
@@ -48,6 +48,8 @@ class OMEZarrWriterV3:
             Image shape (e.g. (2, 2), (1, 4, 3), (2, 3, 4, 5, 6)).
         dtype : Union[np.dtype, str]
             NumPy dtype of the image data (e.g. "uint8").
+        scale_factors : Tuple[int, ...]
+            Integer downsampling factors per axis (e.g. (1,1,2,2)).
         axes_names : Optional[List[str]]
             Names of each axis; defaults to last N of ["t","c","z","y","x"].
         axes_types : Optional[List[str]]
@@ -56,14 +58,12 @@ class OMEZarrWriterV3:
             Physical units for each axis (e.g. ["ms", None, "µm"]).
         axes_scale : Optional[List[float]]
             Physical scale per axis at base resolution.
-        scale_factors : Optional[Tuple[int, ...]]
-            Integer downsampling factors per axis (e.g. (1,1,2,2)).
         num_levels : Optional[int]
             Number of pyramid levels to generate;
             if None, compute until no further reduction.
         chunk_size : Optional[Tuple[int,...]]
             Chunk size; None defaults to 16 mb chunk.
-        shards : Optional[Tuple[int,...]]
+        shard_factor : Optional[Tuple[int,...]]
             Shard factor; None disables sharding.
         compressor : Optional[BloscCodec]
             Zarr compressor to use (default: Blosc Zstd).
@@ -80,6 +80,7 @@ class OMEZarrWriterV3:
             (e.g. {"type":"scale","scale":[...]}).
         """
         # 1) Store fundamental properties
+        self.store = store
         self.shape = tuple(shape)
         self.dtype = np.dtype(dtype)
         self.ndim = len(self.shape)
@@ -98,87 +99,49 @@ class OMEZarrWriterV3:
         self.level_shapes = compute_level_shapes(
             self.shape, self.axes.names, self.axes.factors, num_levels
         )
-        # 4) Record actual number of levels
         self.num_levels = len(self.level_shapes)
 
-        # 5) Determine uniform chunk size tuple
+        # 4) Determine uniform chunk size tuple
         if chunk_size is None:
-            # Legacy auto-suggest based on base level
+            # auto-suggest based on base level
             self.chunk_size = chunk_size_from_memory_target(
                 self.level_shapes[0], self.dtype, 16 << 20
             )
         else:
             self.chunk_size = chunk_size
 
-        # 6) Determine uniform shard factor tuple (optional)
+        # 5) Determine uniform shard factor tuple (optional)
         self.shard_factor = shard_factor
+        self.compressor = compressor
 
-        # 7) Initialize Zarr store and create arrays for each level
-        self.root = self._init_store(store)
-        self.datasets = self._create_arrays(compressor)
-
-        # 8) Convert Channel objects to raw dicts (if provided)
-        if channels is not None:
-            self.channels = [ch.to_dict() for ch in channels]
-        else:
-            self.channels: Optional[List[Dict[str, Any]]] = None  # type: ignore
-
-        # 9) Store OMERO render settings and top-level scale transform
+        # 6) Store additional metadata fields
+        self.image_name = image_name
+        self.channels = [ch.to_dict() for ch in channels] if channels else None
         self.rdefs = rdefs
+        self.creator_info = creator_info
         self.root_transform = root_transform
 
-        # 10) Write the OME-Zarr metadata block
-        axes_meta = self.axes.to_metadata()
-        self._write_metadata(
-            name=image_name,
-            axes=axes_meta,
-            channels=self.channels,
-            rdefs=self.rdefs,
-            creator=creator_info,
-            root_transform=self.root_transform,
-        )
+        # 7) Placeholder for store and dataset references
+        self.root: Optional[zarr.Group] = None
+        self.datasets: List[zarr.Array] = []
+        self._initialized: bool = False
 
-    @staticmethod
-    def _init_store(store: Union[str, zarr.storage.StoreLike]) -> zarr.Group:
+    def _initialize(self) -> None:
         """
-        Create or open a Zarr group at the given store location.
-
-        Parameters
-        ----------
-        store : Union[str, zarr.storage.StoreLike]
-            If string containing "://", opens fsspec store in overwrite mode;
-            otherwise opens a local group in overwrite mode.
-
-        Returns
-        -------
-        zarr.Group
-            The root group at 'store'.
+        Create the Zarr store and arrays, and write multiscale metadata.
+        Should only be called once, lazily.
         """
-        if isinstance(store, str) and "://" in store:
-            fs = zarr.storage.FsspecStore(store, mode="w")
-            return zarr.group(store=fs, overwrite=True)
-        return zarr.group(store=store, overwrite=True)
+        if isinstance(self.store, str) and "://" in self.store:
+            fs = zarr.storage.FsspecStore(self.store, mode="w")
+            self.root = zarr.group(store=fs, overwrite=True)
+        else:
+            self.root = zarr.group(store=self.store, overwrite=True)
 
-    def _create_arrays(self, resolver: Optional[BloscCodec]) -> List[zarr.Array]:
-        """
-        Create Zarr arrays for each multiscale level under the root group.
-
-        Parameters
-        ----------
-        resolver : Optional[BloscCodec]
-            If provided, uses this Blosc codec; otherwise uses default Zstd.
-
-        Returns
-        -------
-        List[zarr.Array]
-            One Zarr array per level, named "0", "1", etc.
-        """
-        comp = resolver or BloscCodec(
+        comp = self.compressor or BloscCodec(
             cname="zstd", clevel=3, shuffle=BloscShuffle.bitshuffle
         )
-        arrays: List[zarr.Array] = []
+        self.datasets = []
         for lvl, shape in enumerate(self.level_shapes):
-            # Use uniform chunk_size and shard_factor
             chunks = self.chunk_size
             if self.shard_factor is not None:
                 shards = tuple(c * self.shard_factor[i] for i, c in enumerate(chunks))
@@ -193,42 +156,19 @@ class OMEZarrWriterV3:
                 dtype=self.dtype,
                 compressors=comp,
             )
-            arrays.append(arr)
-        return arrays
+            self.datasets.append(arr)
 
-    def _write_metadata(
-        self,
-        name: str,
-        axes: List[dict],
-        channels: Optional[List[dict]],
-        rdefs: Optional[dict],
-        creator: Optional[dict],
-        root_transform: Optional[Dict[str, Any]],
-    ) -> None:
+        self._write_metadata()
+        self._initialized = True
+
+    def _write_metadata(self) -> None:
         """
-        Write the 'ome' attribute with NGFF v0.5 metadata.
-
-        Parameters
-        ----------
-        name : str
-            Image name stored under "multiscales"[0]["name"].
-        axes : List[dict]
-            Axis metadata from self.axes.to_metadata().
-        channels : Optional[List[dict]]
-            OMERO channel metadata, under "omero" → "channels".
-        rdefs : Optional[dict]
-            OMERO render settings, under "omero" → "rdefs".
-        creator : Optional[dict]
-            Creator metadata, stored under "_creator".
-        root_transform : Optional[Dict[str, Any]]
-            Top-level coordinate transformation for the multiscale.
-
-        Notes
-        -----
-        * Builds datasets list, each with a per-level scale transform.
-        * Inserts top-level transform if provided.
-        * Updates self.root.attrs['ome'].
+        Write NGFF v0.5 multiscale and OMERO metadata to root.attrs["ome"].
         """
+        if self.root is None:
+            raise RuntimeError("Store must be initialized before writing metadata.")
+
+        axes_meta = self.axes.to_metadata()
         datasets_list: List[dict] = []
         for lvl, shape in enumerate(self.level_shapes):
             scale_vals: List[float] = []
@@ -248,11 +188,11 @@ class OMEZarrWriterV3:
                 }
             )
 
-        multiscale_entry: Dict[str, Any] = {"name": name or ""}
-        if root_transform is not None:
-            multiscale_entry["coordinateTransformations"] = [root_transform]
+        multiscale_entry: Dict[str, Any] = {"name": self.image_name or ""}
+        if self.root_transform is not None:
+            multiscale_entry["coordinateTransformations"] = [self.root_transform]
 
-        multiscale_entry["axes"] = axes
+        multiscale_entry["axes"] = axes_meta
         multiscale_entry["datasets"] = datasets_list
 
         ome_block: Dict[str, Any] = {
@@ -260,14 +200,14 @@ class OMEZarrWriterV3:
             "multiscales": [multiscale_entry],
         }
 
-        if channels is not None:
-            omero_block: Dict[str, Any] = {"version": "0.5", "channels": channels}
-            if rdefs is not None:
-                omero_block["rdefs"] = rdefs
+        if self.channels is not None:
+            omero_block: Dict[str, Any] = {"version": "0.5", "channels": self.channels}
+            if self.rdefs is not None:
+                omero_block["rdefs"] = self.rdefs
             ome_block["omero"] = omero_block
 
-        if creator:
-            ome_block["_creator"] = creator
+        if self.creator_info:
+            ome_block["_creator"] = self.creator_info
 
         self.root.attrs.update({"ome": ome_block})
 
@@ -288,6 +228,9 @@ class OMEZarrWriterV3:
         * Uses `dask.array.store` to persist into the pre-created Zarr arrays,
           preserving chunk and shard settings.
         """
+        if not self._initialized:
+            self._initialize()
+
         # Wrap or reuse input as a Dask array
         if isinstance(input_data, da.Array):
             dask_array = input_data
@@ -321,6 +264,9 @@ class OMEZarrWriterV3:
         * Finds the "t" axis in self.axes.names.
         * Preserves uniform chunk_size and shard_factor settings on each Zarr array.
         """
+        if not self._initialized:
+            self._initialize()
+
         # Locate the time axis
         axis_t = next(i for i, n in enumerate(self.axes.names) if n.lower() == "t")
 

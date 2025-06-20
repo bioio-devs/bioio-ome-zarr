@@ -235,7 +235,13 @@ writer.write_full_volume(data)
 shape = (3, 2, 2, 4, 4)
 data = np.random.randint(0,255,size=shape,dtype=np.uint8)
 
-writer = OmeZarrWriterV3(store="out_time.zarr", shape=shape, dtype=data.dtype)
+writer = OmeZarrWriterV3(
+    store="out_time.zarr",
+    shape=shape,
+    dtype=data.dtype,
+    scale_factors=(1,1,2,2,2)
+)
+
 for t in range(shape[0]):
     # extract single timepoint (C,Z,Y,X)
     slice_t = data[t]

@@ -19,18 +19,15 @@ class Axes:
     DEFAULT_TYPES: List[str] = ["time", "channel", "space", "space", "space"]
     DEFAULT_UNITS: List[Optional[str]] = [None, None, None, None, None]
     DEFAULT_SCALES: List[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
-    # We do not downsample the Z dimension by default because most Z-stacks
-    # contain far fewer slices than XY pixels and the XY resolution is much finer.
-    DEFAULT_FACTORS: Tuple[int, int, int, int, int] = (1, 1, 1, 2, 2)
 
     def __init__(
         self,
         ndim: int,
+        factors: Tuple[int, ...],
         names: Optional[List[str]] = None,
         types: Optional[List[str]] = None,
         units: Optional[List[Optional[str]]] = None,
         scales: Optional[List[float]] = None,
-        factors: Optional[Tuple[int, ...]] = None,
     ):
         self.ndim = ndim
         self.names = names[-ndim:] if names is not None else Axes.DEFAULT_NAMES[-ndim:]
@@ -39,9 +36,7 @@ class Axes:
         self.scales = (
             scales[-ndim:] if scales is not None else Axes.DEFAULT_SCALES[-ndim:]
         )
-        self.factors = (
-            factors[-ndim:] if factors is not None else Axes.DEFAULT_FACTORS[-ndim:]
-        )
+        self.factors = factors[-ndim:]
 
     def to_metadata(self) -> List[dict]:
         return [
