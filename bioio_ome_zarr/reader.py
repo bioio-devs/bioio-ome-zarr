@@ -386,7 +386,7 @@ class Reader(reader.Reader):
         Build multi-scene OME object with one Image per scene.
         Raises ValueError on unsupported dtype, because Pixels is required.
         """
-        if self._ome_metadata is not None:
+        if hasattr(self, "_ome_metadata") and self._ome_metadata is not None:
             return self._ome_metadata
 
         # Dynamic PixelType lookup
