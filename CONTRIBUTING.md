@@ -9,6 +9,27 @@ If something goes wrong at any point during installing the library please see ho
 [our CI/CD on GitHub Actions](.github/workflows/build-main.yml) installs and builds the
 project as it will always be the most up-to-date.
 
+## Test Resources and Git LFS
+
+ This project uses Git Large File Storage (LFS) to store large test resources under /tests/resources/.
+ Before cloning, make sure you have Git LFS installed:
+
+ ### macOS
+ ```
+ brew install git-lfs
+ git lfs install
+ ```
+
+ ### Debian/Ubuntu
+ ```
+ sudo apt-get install git-lfs
+ git lfs install
+ ```
+
+ ### Or install manually: https://git-lfs.github.com/
+
+ ⚠️ If you skip git lfs install, large files will appear as plain-text pointers and your tests may fail.
+ 
 ## Get Started!
 
 Ready to contribute? Here's how to set up `bioio-ome-zarr` for local development.
