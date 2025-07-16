@@ -92,7 +92,7 @@ class OMEZarrWriter:
         if self.root is None:
             raise RuntimeError("init_store() must be called before creating levels")
         arr = self.root.zeros(
-            str(idx),
+            name=str(idx),
             shape=shape,
             chunks=chunk,
             dtype=dtype,
