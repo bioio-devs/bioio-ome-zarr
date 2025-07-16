@@ -18,7 +18,6 @@ from bioio_ome_zarr.writers import (
     compute_level_chunk_sizes_zslice,
     compute_level_shapes,
 )
-from bioio_ome_zarr.writers.ome_zarr_writer_v2 import OMEZarrWriter
 
 from ..conftest import array_constructor
 
@@ -245,7 +244,7 @@ def test_append_resolution_level(tmp_path: pathlib.Path) -> None:
     channel_colors = [0xFF0000] * initial_shapes[0][1]
 
     # Create initial writer and write levels 0–2 + metadata
-    w1 = OMEZarrWriter()
+    w1 = OmeZarrWriterV2()
     w1.init_store(zarr_path, initial_shapes, initial_chunks, dtype, overwrite=True)
     w1.write_t_batches_array(da0)
     meta1 = w1.generate_metadata(
@@ -268,7 +267,7 @@ def test_append_resolution_level(tmp_path: pathlib.Path) -> None:
     shapes = [initial_shapes[i] for i in reader1.resolution_levels] + [new_shape]
     chunks = [initial_chunks[i] for i in reader1.resolution_levels] + [new_shape]
 
-    w2 = OMEZarrWriter()
+    w2 = OmeZarrWriterV2()
     w2.init_store(zarr_path, shapes, chunks, dtype, overwrite=False)
     w2.write_t_batches_array(da0)
     meta2 = w2.generate_metadata(
