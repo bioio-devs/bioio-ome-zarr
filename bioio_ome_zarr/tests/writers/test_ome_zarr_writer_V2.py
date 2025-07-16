@@ -5,10 +5,12 @@
 import pathlib
 from typing import Callable, List, Tuple, cast
 
+import dask.array as da
 import numpy as np
 import pytest
 from ngff_zarr import from_ngff_zarr
 
+from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import (
     DimTuple,
     OmeZarrWriterV2,
@@ -16,6 +18,7 @@ from bioio_ome_zarr.writers import (
     compute_level_chunk_sizes_zslice,
     compute_level_shapes,
 )
+from bioio_ome_zarr.writers.ome_zarr_writer_v2 import OMEZarrWriter
 
 from ..conftest import array_constructor
 
@@ -211,3 +214,94 @@ def test_write_ome_zarr_iterative(
     # also verify that level-0 data round-trips correctly
     for t in range(shape[0]):
         np.testing.assert_array_equal(ms.images[0].data[t], im[t])
+
+
+def test_append_resolution_level(tmp_path: pathlib.Path) -> None:
+    # -----------------
+    # Arrange
+    # -----------------
+    zarr_path = str(tmp_path / "pyramid.zarr")
+    dtype = np.uint16
+
+    # Initial levels 0–2 (T, C, Z, Y, X)
+    initial_shapes = [
+        (1, 1, 1, 64, 64),
+        (1, 1, 1, 32, 32),
+        (1, 1, 1, 16, 16),
+    ]
+    initial_chunks = list(initial_shapes)
+
+    # Dummy data for level 0
+    data0 = np.arange(np.prod(initial_shapes[0]), dtype=dtype).reshape(
+        initial_shapes[0]
+    )
+    da0 = da.from_array(data0, chunks=initial_chunks[0])
+
+    # Metadata parameters
+    physical_dims = {"x": 1.0, "y": 1.0, "z": 1.0, "t": 1.0, "c": 1.0}
+    physical_units = {"x": "µm", "y": "µm", "z": "µm", "t": "s"}
+    image_name = "test"
+    channel_names = [f"c{i}" for i in range(initial_shapes[0][1])]
+    channel_colors = [0xFF0000] * initial_shapes[0][1]
+
+    # Create initial writer and write levels 0–2 + metadata
+    w1 = OMEZarrWriter()
+    w1.init_store(zarr_path, initial_shapes, initial_chunks, dtype, overwrite=True)
+    w1.write_t_batches_array(da0)
+    meta1 = w1.generate_metadata(
+        image_name=image_name,
+        channel_names=channel_names,
+        physical_dims=physical_dims,
+        physical_units=physical_units,
+        channel_colors=channel_colors,
+    )
+    w1.write_metadata(meta1)
+
+    reader1 = Reader(zarr_path)
+    assert reader1.resolution_levels == (0, 1, 2)
+
+    # -----------------
+    # Act
+    # -----------------
+    # Append level 3 at half the resolution of level 2
+    new_shape = (1, 1, 1, 8, 8)
+    shapes = [initial_shapes[i] for i in reader1.resolution_levels] + [new_shape]
+    chunks = [initial_chunks[i] for i in reader1.resolution_levels] + [new_shape]
+
+    w2 = OMEZarrWriter()
+    w2.init_store(zarr_path, shapes, chunks, dtype, overwrite=False)
+    w2.write_t_batches_array(da0)
+    meta2 = w2.generate_metadata(
+        image_name=image_name,
+        channel_names=channel_names,
+        physical_dims=physical_dims,
+        physical_units=physical_units,
+        channel_colors=channel_colors,
+    )
+    w2.write_metadata(meta2)
+
+    reader2 = Reader(zarr_path)
+
+    # -----------------
+    # Assert
+    # -----------------
+    # 1) resolution_levels includes the new level
+    assert reader2.resolution_levels == (0, 1, 2, 3)
+
+    # 2) resolution_level_dims maps correctly
+    expected_dims = {
+        0: initial_shapes[0],
+        1: initial_shapes[1],
+        2: initial_shapes[2],
+        3: new_shape,
+    }
+    assert reader2.resolution_level_dims == expected_dims
+
+    # 3) get_image_data returns correct arrays per level
+    for lvl in reader2.resolution_levels:
+        reader2.set_resolution_level(lvl)
+        data = reader2.get_image_data()
+        assert isinstance(data, np.ndarray)
+        assert data.shape == expected_dims[lvl]
+        if lvl == 0:
+            np.testing.assert_array_equal(data, data0)

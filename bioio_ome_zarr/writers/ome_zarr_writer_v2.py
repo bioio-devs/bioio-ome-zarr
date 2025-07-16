@@ -75,9 +75,31 @@ class OMEZarrWriter:
 
     def __init__(self) -> None:
         self.output_path = ""
-        self.levels: List[ZarrLevel] = []
         self.store = None
         self.root: Optional[zarr.hierarchy.Group] = None
+        self.levels: List[ZarrLevel] = []
+        self._existing_level_count = 0
+
+    def _create_level(
+        self,
+        idx: int,
+        shape: DimTuple,
+        chunk: DimTuple,
+        dtype: np.dtype,
+        compressor: Optional[numcodecs.abc.Codec],
+    ) -> None:
+        """Create one new level `idx` at `shape`/`chunk` and add to self.levels."""
+        if self.root is None:
+            raise RuntimeError("init_store() must be called before creating levels")
+        arr = self.root.zeros(
+            str(idx),
+            shape=shape,
+            chunks=chunk,
+            dtype=dtype,
+            compressor=compressor,
+            zarr_format=2,
+        )
+        self.levels.append(ZarrLevel(shape, chunk, dtype, arr))
 
     def init_store(
         self,
@@ -85,74 +107,98 @@ class OMEZarrWriter:
         shapes: List[DimTuple],
         chunk_sizes: List[DimTuple],
         dtype: np.dtype,
-        compressor: numcodecs.abc.Codec | None = None,
+        compressor: Optional[numcodecs.abc.Codec] = None,
+        overwrite: bool = False,
     ) -> None:
+        """
+        Initialize the Zarr store. In overwrite mode, create all levels from scratch.
+        Otherwise, append only the new levels beyond those returned by
+        Reader.resolution_levels. Emits Zarr v2 metadata ('.zarray' + '.zattrs').
+        """
         if len(shapes) != len(chunk_sizes) or not shapes:
             raise ValueError("shapes and chunk_sizes must align and be non-empty")
 
         self.output_path = output_path
-        is_remote = output_path.startswith("s3://") or output_path.startswith("gs://")
-        if is_remote:
-            prefix = output_path.split("://", 1)[1]
+
+        if output_path.startswith(("s3://", "gs://")):
             import fsspec
 
             protocol = "s3" if output_path.startswith("s3://") else "gcs"
             fs = fsspec.filesystem(protocol)
+            prefix = output_path.split("://", 1)[1]
             self.store = FsspecStore(fs=fs, path=prefix)
         else:
             self.store = LocalStore(output_path)
 
-        self.root = zarr.group(store=self.store, overwrite=True)
-        self._create_levels(
-            root=self.root,
-            level_shapes=shapes,
-            level_chunk_sizes=chunk_sizes,
-            dtype=dtype,
-            compressor=compressor,
-        )
-
-    def _create_levels(
-        self,
-        root: zarr.Group,
-        level_shapes: List[DimTuple],
-        level_chunk_sizes: List[DimTuple],
-        dtype: np.dtype,
-        compressor: numcodecs.abc.Codec | None = None,
-    ) -> None:
-        self.levels = []
-        for i, shape in enumerate(level_shapes):
-            arr = root.zeros(
-                str(i),
-                shape=shape,
-                chunks=level_chunk_sizes[i],
-                dtype=dtype,
-                compressor=compressor,
-                zarr_format=2,
+        if overwrite:
+            # OVERWRITE MODE: create all new levels
+            self.root = zarr.group(
+                store=self.store,
+                overwrite=True,
+                zarr_version=2,
             )
-            self.levels.append(ZarrLevel(shape, level_chunk_sizes[i], dtype, arr))
+            self._existing_level_count = 0
+            self.levels = []
+            for idx, (shape, chunk) in enumerate(zip(shapes, chunk_sizes)):
+                self._create_level(idx, shape, chunk, dtype, compressor)
+            return
+        else:
+            # APPEND MODE: detect which levels already exist
+            self.root = zarr.open_group(
+                store=self.store,
+                mode="a",
+                zarr_version=2,
+            )
+            try:
+                existing_idxs = list(Reader(self.output_path).resolution_levels)
+            except Exception:
+                existing_idxs = []
+            self._existing_level_count = len(existing_idxs)
+
+            # load existing levels
+            self.levels = []
+            for idx in existing_idxs:
+                arr = zarr.open_array(store=self.store, path=str(idx), mode="a")
+                shape = shapes[idx]
+                chunk = chunk_sizes[idx]
+                self.levels.append(ZarrLevel(shape, chunk, arr.dtype, arr))
+
+            # create only the new levels beyond existing_idxs
+            for new_idx in range(self._existing_level_count, len(shapes)):
+                shape = shapes[new_idx]
+                chunk = chunk_sizes[new_idx]
+                self._create_level(new_idx, shape, chunk, dtype, compressor)
 
     def _downsample_and_write_batch_t(
         self, data_tczyx: da.Array, start_t: int, end_t: int, toffset: int = 0
     ) -> None:
+        """
+        Write frames [start_t, end_t) into each new level only.
+        Levels with index < self._existing_level_count are skipped.
+        """
         dtype = data_tczyx.dtype
-        for k in range(start_t, end_t):
-            subset = data_tczyx[[k - start_t]]
-            da.to_zarr(
-                subset,
-                self.levels[0].zarray,
-                region=(slice(k + toffset, k + toffset + 1),),
-            )
-        for j in range(1, len(self.levels)):
-            nextshape = (end_t - start_t,) + self.levels[j].shape[1:]
-            data_tczyx = resize(data_tczyx, nextshape, order=0).astype(dtype)
-            for k in range(start_t, end_t):
-                subset = data_tczyx[[k - start_t]]
+        curr = data_tczyx
+
+        for level_index, level in enumerate(self.levels):
+            # downsample for levels > 0
+            if level_index > 0:
+                next_shape = (end_t - start_t,) + level.shape[1:]
+                curr = resize(curr, next_shape, order=0).astype(dtype)
+
+            # skip any pre-existing levels
+            if level_index < self._existing_level_count:
+                continue
+
+            # write each time‐slice into the ZarrArray
+            for t in range(start_t, end_t):
+                slice_ = curr[[t - start_t]]
                 da.to_zarr(
-                    subset,
-                    self.levels[j].zarray,
-                    region=(slice(k + toffset, k + toffset + 1),),
+                    slice_,
+                    level.zarray,
+                    region=(slice(t + toffset, t + toffset + 1),),
                 )
-        log.info(f"Completed {start_t} to {end_t}")
+
+            log.info(f"Completed {start_t} to {end_t}")
 
     def write_t_batches(
         self,
