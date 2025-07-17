@@ -20,7 +20,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-      with: lfs
+      with: 
+        lfs: true # For test files
     - name: Set up Python
       uses: actions/setup-python@v5
       with:

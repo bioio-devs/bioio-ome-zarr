@@ -143,7 +143,7 @@ def get_scale_ratio(
 
 
 def compute_level_chunk_sizes_zslice(
-    level_shapes: List[Tuple[int, ...]]
+    level_shapes: List[Tuple[int, ...]],
 ) -> List[DimTuple]:
     """
     Compute Z-slice–based chunk sizes for a multiscale pyramid.
