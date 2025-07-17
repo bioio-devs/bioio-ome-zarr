@@ -110,6 +110,7 @@ jobs:
     - name: Upload Performance Results
       uses: actions/upload-artifact@v4
       with:
+        path: "output.csv"
         if-no-files-found: error
 
   # Publish to PyPI if test, lint, and manifest checks passed
