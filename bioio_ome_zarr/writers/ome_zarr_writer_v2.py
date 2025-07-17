@@ -102,7 +102,12 @@ class OMEZarrWriter:
         else:
             self.store = LocalStore(output_path)
 
-        self.root = zarr.group(store=self.store, overwrite=True)
+        self.root = zarr.group(
+            store=self.store,
+            overwrite=True,
+            zarr_format=2,
+        )
+
         self._create_levels(
             root=self.root,
             level_shapes=shapes,
@@ -122,7 +127,7 @@ class OMEZarrWriter:
         self.levels = []
         for i, shape in enumerate(level_shapes):
             arr = root.zeros(
-                str(i),
+                name=str(i),
                 shape=shape,
                 chunks=level_chunk_sizes[i],
                 dtype=dtype,
