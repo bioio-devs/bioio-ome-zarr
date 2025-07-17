@@ -22,11 +22,10 @@ clean:
 # install with all deps
 install:
 	pip install -e .[lint,test]
-	pre-commit install
 
 setup-dev:
 	just install
-	python scripts/download_test_resources.py
+	pre-commit install
 
 # lint, format, and check all files
 lint:
