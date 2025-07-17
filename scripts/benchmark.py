@@ -23,4 +23,5 @@ test_files = [
     for test_file in test_resources_dir.iterdir()
     if test_file.name.endswith(".zarr")
 ]
+print(f"Test files: {[file.name for file in test_files]}")
 bioio_base.benchmark.benchmark(bioio_ome_zarr.reader.Reader, test_files, benchmark_functions)
