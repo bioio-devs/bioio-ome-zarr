@@ -1,0 +1,1 @@
+bioio_ome_zarr/tests/resources/** filter=lfs diff=lfs merge=lfs -text

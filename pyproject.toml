@@ -28,6 +28,7 @@ dependencies = [
     "bioio-base>=1.4.1",
     "fsspec>=2022.8.0",
     "s3fs>=2023.9.0",
+    "scikit-image!=0.23.0",
     "xarray>=0.16.1",
     "zarr>=3.0.6",
 ]
@@ -48,13 +49,16 @@ test = [
   "pytest>=5.4.3",
   "pytest-cov>=2.9.0",
   "pytest-raises>=0.11",
-  "quilt3", # no pin to avoid pip cycling (boto is really hard to manage)
 ]
 
 # entry points
 # https://peps.python.org/pep-0621/#entry-points
 [project.entry-points."bioio.readers"]
 bioio-ome-zarr = "bioio_ome_zarr"
+
+[project.entry-points."bioio.writers"]
+OmeZarrWriterV2 = "bioio_ome_zarr.writers:OmeZarrWriterV2"
+OmeZarrWriterV3 = "bioio_ome_zarr.writers:OmeZarrWriterV3"
 
 # build settings
 # https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html
