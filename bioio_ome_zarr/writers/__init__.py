@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 from .channel import Channel
-from .ome_zarr_writer_v2 import OMEZarrWriter as OmeZarrWriterV2
+
+# from .ome_zarr_writer_v2 import OMEZarrWriter as OmeZarrWriterV2
 from .ome_zarr_writer_v3 import OMEZarrWriterV3 as OmeZarrWriterV3
 from .utils import (
     DimTuple,
@@ -17,7 +18,7 @@ from .utils import (
 __all__ = [
     "Channel",
     "DimTuple",
-    "OmeZarrWriterV2",
+    # "OmeZarrWriterV2",
     "OmeZarrWriterV3",
     "add_zarr_level",
     "chunk_size_from_memory_target",
