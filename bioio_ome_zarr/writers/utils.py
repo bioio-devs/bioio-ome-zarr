@@ -9,6 +9,8 @@ import numcodecs
 import numpy as np
 import skimage.transform
 import zarr
+from zarr.core.chunk_key_encodings import V2ChunkKeyEncoding
+from zarr.storage import LocalStore
 
 from bioio_ome_zarr.reader import Reader
 
@@ -243,7 +245,8 @@ def add_zarr_level(
 
     new_shape = tuple(int(np.ceil(s * f)) for s, f in zip(src_shape, scale_factors))
     chunks = chunk_size_from_memory_target(new_shape, dtype, 16 * 1024 * 1024)
-    group = zarr.open_group(str(existing_zarr), mode="a", zarr_version=2)
+    store = LocalStore(str(existing_zarr))
+    group = zarr.open_group(store=store, mode="a", zarr_format=2)
     new_idx = src_idx + 1
     arr = group.create_array(
         name=str(new_idx),
@@ -253,16 +256,15 @@ def add_zarr_level(
         compressors=[compressor] if compressor is not None else None,
         overwrite=False,
         fill_value=0,
+        chunk_key_encoding=V2ChunkKeyEncoding(separator="/").to_dict(),
     )
 
     total_t = src_shape[0]
     for t_start in range(0, total_t, t_batch):
         t_end = min(t_start + t_batch, total_t)
-
         t_block = rdr.get_image_dask_data(
             "TCZYX", resolution_level=src_idx, T=slice(t_start, t_end)
         )
-
         resized = resize(t_block, (t_end - t_start, *new_shape[1:]), order=0).astype(
             dtype
         )
