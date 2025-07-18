@@ -226,73 +226,56 @@ def chunk_size_from_memory_target(
 def add_zarr_level(
     existing_zarr: Union[str, Path],
     scale_factors: Tuple[float, float, float, float, float],  # (T, C, Z, Y, X)
-    compressor: Optional[numcodecs.abc.Codec] = None,
-    t_batch: int = 4,
+    compressor: numcodecs.abc.Codec | None = None,
 ) -> None:
-    """
-    Append one more resolution level to an OME-Zarr, writing in T-slices.
-    """
     rdr = Reader(existing_zarr)
     levels = list(rdr.resolution_levels)
     if not levels:
-        raise RuntimeError("No existing resolution levels found.")
+        raise RuntimeError("No resolution levels found.")
 
-    src_idx = max(levels)
-    src_shape = rdr.resolution_level_dims[src_idx]
+    src_level_idx = max(levels)
+    src_shape = rdr.resolution_level_dims[src_level_idx]
     dtype = rdr.dtype
 
-    new_shape = tuple(int(np.ceil(s * f)) for s, f in zip(src_shape, scale_factors))
-    chunks = chunk_size_from_memory_target(new_shape, dtype, 16 * 1024 * 1024)
-    group = zarr.open_group(str(existing_zarr), mode="a", zarr_version=2)
-    new_idx = src_idx + 1
+    new_shape = tuple(int(np.ceil(dim * f)) for dim, f in zip(src_shape, scale_factors))
+    new_chunks = chunk_size_from_memory_target(new_shape, dtype, 16 * 1024 * 1024)
+
+    dask_data = rdr.get_image_dask_data("TCZYX", resolution_level=src_level_idx)
+    dask_data_ds = resize(dask_data, new_shape, order=0)
+
+    group = zarr.open_group(str(existing_zarr), mode="a", zarr_format=2)
+
+    new_level_idx = src_level_idx + 1
     arr = group.create_array(
-        name=str(new_idx),
+        name=str(new_level_idx),
         shape=new_shape,
-        chunks=chunks,
         dtype=dtype,
+        chunks=new_chunks,
         compressors=[compressor] if compressor is not None else None,
         overwrite=False,
         fill_value=0,
     )
 
-    total_t = src_shape[0]
-    for t_start in range(0, total_t, t_batch):
-        t_end = min(t_start + t_batch, total_t)
+    da.to_zarr(dask_data_ds, arr, overwrite=True)
 
-        t_block = rdr.get_image_dask_data(
-            "TCZYX", resolution_level=src_idx, T=slice(t_start, t_end)
-        )
+    multiscales = group.attrs.get("multiscales", [{}])
+    datasets = multiscales[0].get("datasets", [])
 
-        resized = resize(t_block, (t_end - t_start, *new_shape[1:]), order=0).astype(
-            dtype
-        )
-
-        da.to_zarr(
-            resized,
-            arr,
-            region=(slice(t_start, t_end),) + (slice(None),) * (resized.ndim - 1),
-            overwrite=True,
-        )
-
-    ms = group.attrs.get("multiscales", [{}])
-    datasets = ms[0].setdefault("datasets", [])
-    if datasets:
-        last_scale = datasets[-1]["coordinateTransformations"][0]["scale"]
+    if datasets and "coordinateTransformations" in datasets[-1]:
+        prev_scale = datasets[-1]["coordinateTransformations"][0]["scale"]
     else:
-        last_scale = [1] * len(scale_factors)
-    new_scale = [p * f for p, f in zip(last_scale, scale_factors)]
-
+        prev_scale = [1, 1, 1, 1, 1]
+    new_scale = [p * f for p, f in zip(prev_scale, scale_factors)]
     datasets.append(
         {
-            "path": str(new_idx),
+            "path": str(new_level_idx),
             "coordinateTransformations": [
                 {"type": "scale", "scale": new_scale},
-                {"type": "translation", "translation": [0] * len(scale_factors)},
+                {"type": "translation", "translation": [0, 0, 0, 0, 0]},
             ],
         }
     )
-    group.attrs["multiscales"] = ms
+    multiscales[0]["datasets"] = datasets
+    group.attrs["multiscales"] = multiscales
 
-    print(
-        f"Added level {new_idx}: shape={new_shape}, chunks={chunks}, scale={new_scale}"
-    )
+    print(f"Added level {new_level_idx} shape={new_shape}, scale={new_scale}")
