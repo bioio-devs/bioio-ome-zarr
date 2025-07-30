@@ -19,7 +19,7 @@ OME_NGFF_VERSION = "0.4"
 
 
 def dim_tuple_to_dict(
-    dims: Union[DimTuple, Tuple[float, float, float, float, float]]
+    dims: Union[DimTuple, Tuple[float, float, float, float, float]],
 ) -> dict:
     if len(dims) != 5:
         raise ValueError("dims must be a 5-tuple in TCZYX order")
