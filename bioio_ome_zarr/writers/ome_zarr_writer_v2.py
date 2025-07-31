@@ -101,13 +101,13 @@ class OMEZarrWriter:
             self.store = FsspecStore(fs=fs, path=prefix)
         else:
             self.store = LocalStore(output_path)
-            
+
         self.root = zarr.group(
             store=self.store,
             overwrite=True,
             zarr_format=2,
         )
-        
+
         self._create_levels(
             root=self.root,
             level_shapes=shapes,
