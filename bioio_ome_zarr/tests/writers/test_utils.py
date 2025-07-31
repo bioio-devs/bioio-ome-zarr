@@ -1,11 +1,14 @@
+import pathlib
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pytest
 from dask import array as da
 
-# from bioio_ome_zarr import Reader
-from bioio_ome_zarr.writers import (  # OmeZarrWriterV2,; add_zarr_level,
+from bioio_ome_zarr import Reader
+from bioio_ome_zarr.writers import (
+    OmeZarrWriterV2,
+    add_zarr_level,
     chunk_size_from_memory_target,
     compute_level_chunk_sizes_zslice,
     compute_level_shapes,
@@ -155,55 +158,55 @@ def test_get_scale_ratio() -> None:
     assert get_scale_ratio(lvl0, lvl1) == (2.0, 2.0, 2.0)
 
 
-# def test_add_zarr_level_using_reader(tmp_path: pathlib.Path) -> None:
-#     # ARRANGE: Set up initial state
-#     store_path = tmp_path / "test.zarr"
-#     writer = OmeZarrWriterV2()
+def test_add_zarr_level_using_reader(tmp_path: pathlib.Path) -> None:
+    # ARRANGE: Set up initial state
+    store_path = tmp_path / "test.zarr"
+    writer = OmeZarrWriterV2()
 
-#     data = np.arange(16, dtype="uint8").reshape((1, 1, 1, 4, 4))
-#     da_data = da.from_array(data, chunks=data.shape)
+    data = np.arange(16, dtype="uint8").reshape((1, 1, 1, 4, 4))
+    da_data = da.from_array(data, chunks=data.shape)
 
-#     # Initialize OME‑Zarr with a single resolution level
-#     writer.init_store(
-#         output_path=str(store_path),
-#         shapes=[data.shape],
-#         chunk_sizes=[data.shape],
-#         dtype=data.dtype,
-#         compressor=None,
-#     )
-#     writer.write_t_batches_array(da_data)
-#     metadata = writer.generate_metadata(
-#         image_name="test",
-#         channel_names=["A"],
-#         physical_dims={"t": 1, "c": 1, "z": 1, "y": 1.0, "x": 1.0},
-#         physical_units={
-#             "t": "unit",
-#             "c": "unit",
-#             "z": "unit",
-#             "y": "unit",
-#             "x": "unit",
-#         },
-#         channel_colors=[0xFFFFFF],
-#     )
-#     writer.write_metadata(metadata)
+    # Initialize OME‑Zarr with a single resolution level
+    writer.init_store(
+        output_path=str(store_path),
+        shapes=[data.shape],
+        chunk_sizes=[data.shape],
+        dtype=data.dtype,
+        compressor=None,
+    )
+    writer.write_t_batches_array(da_data)
+    metadata = writer.generate_metadata(
+        image_name="test",
+        channel_names=["A"],
+        physical_dims={"t": 1, "c": 1, "z": 1, "y": 1.0, "x": 1.0},
+        physical_units={
+            "t": "unit",
+            "c": "unit",
+            "z": "unit",
+            "y": "unit",
+            "x": "unit",
+        },
+        channel_colors=[0xFFFFFF],
+    )
+    writer.write_metadata(metadata)
 
-#     # ACT
-#     add_zarr_level(str(store_path), (1, 1, 1, 0.5, 0.5), compressor=None)
+    # ACT
+    add_zarr_level(str(store_path), (1, 1, 1, 0.5, 0.5), compressor=None)
 
-#     # ASSERT
-#     rdr = Reader(str(store_path))
+    # ASSERT
+    rdr = Reader(str(store_path))
 
-#     # 1) Confirm the correct number of pyramid levels
-#     levels = list(rdr.resolution_levels)
-#     assert levels == [0, 1], f"Expected resolution levels [0,1], got {levels}"
+    # 1) Confirm the correct number of pyramid levels
+    levels = list(rdr.resolution_levels)
+    assert levels == [0, 1], f"Expected resolution levels [0,1], got {levels}"
 
-#     # 2) Confirm the dimensions for each level
-#     dims = rdr.resolution_level_dims
-#     assert dims[0] == (1, 1, 1, 4, 4), f"Level 0 dims mismatch: {dims[0]}"
-#     assert dims[1] == (1, 1, 1, 2, 2), f"Level 1 dims mismatch: {dims[1]}"
+    # 2) Confirm the dimensions for each level
+    dims = rdr.resolution_level_dims
+    assert dims[0] == (1, 1, 1, 4, 4), f"Level 0 dims mismatch: {dims[0]}"
+    assert dims[1] == (1, 1, 1, 2, 2), f"Level 1 dims mismatch: {dims[1]}"
 
-#     # 3) Confirm that the downsampled data matches resize output
-#     data0 = rdr.get_image_dask_data("TCZYX", resolution_level=0).compute()
-#     data1 = rdr.get_image_dask_data("TCZYX", resolution_level=1).compute()
-#     expected = resize(da.from_array(data0), data1.shape, order=0).compute()
-#     assert np.array_equal(data1, expected), "Data mismatch after downsampling"
+    # 3) Confirm that the downsampled data matches resize output
+    data0 = rdr.get_image_dask_data("TCZYX", resolution_level=0).compute()
+    data1 = rdr.get_image_dask_data("TCZYX", resolution_level=1).compute()
+    expected = resize(da.from_array(data0), data1.shape, order=0).compute()
+    assert np.array_equal(data1, expected), "Data mismatch after downsampling"
