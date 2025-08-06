@@ -102,7 +102,12 @@ class OMEZarrWriter:
         else:
             self.store = LocalStore(output_path)
 
-        self.root = zarr.group(store=self.store, overwrite=True, zarr_format=2)
+        self.root = zarr.group(
+            store=self.store,
+            overwrite=True,
+            zarr_format=2,
+        )
+
         self._create_levels(
             root=self.root,
             level_shapes=shapes,
@@ -240,7 +245,8 @@ class OMEZarrWriter:
         tbatch:
             The number of T to write at a time.
         toffset:
-            The offset to start writing T from. All T in the input array will be written
+            The offset to start writing T from.
+            All T in the input array will be written
         """
         # if isinstance(im, (np.ndarray)):
         #     im_da = da.from_array(im)

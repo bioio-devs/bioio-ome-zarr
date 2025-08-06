@@ -1,12 +1,18 @@
 import math
 from dataclasses import dataclass
 from math import prod
+from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple, Union, cast
 
 import dask.array as da
+import numcodecs
 import numpy as np
 import skimage.transform
 import zarr
+from zarr.core.chunk_key_encodings import V2ChunkKeyEncoding
+from zarr.storage import LocalStore
+
+from bioio_ome_zarr.reader import Reader
 
 DimTuple = Tuple[int, int, int, int, int]
 
@@ -217,3 +223,78 @@ def chunk_size_from_memory_target(
 
     # Return as an immutable tuple
     return tuple(chunk_list)
+
+
+def add_zarr_level(
+    existing_zarr: Union[str, Path],
+    scale_factors: Tuple[float, float, float, float, float],  # (T, C, Z, Y, X)
+    compressor: Optional[numcodecs.abc.Codec] = None,
+    t_batch: int = 4,
+) -> None:
+    """
+    Append one more resolution level to an OME-Zarr, writing in T-slices.
+    """
+    rdr = Reader(existing_zarr)
+    levels = list(rdr.resolution_levels)
+    if not levels:
+        raise RuntimeError("No existing resolution levels found.")
+
+    src_idx = max(levels)
+    src_shape = rdr.resolution_level_dims[src_idx]
+    dtype = rdr.dtype
+
+    new_shape = tuple(int(np.ceil(s * f)) for s, f in zip(src_shape, scale_factors))
+    chunks = chunk_size_from_memory_target(new_shape, dtype, 16 * 1024 * 1024)
+    store = LocalStore(str(existing_zarr))
+    group = zarr.open_group(store=store, mode="a", zarr_format=2)
+    new_idx = src_idx + 1
+    arr = group.create_array(
+        name=str(new_idx),
+        shape=new_shape,
+        chunks=chunks,
+        dtype=dtype,
+        compressors=[compressor] if compressor is not None else None,
+        overwrite=False,
+        fill_value=0,
+        chunk_key_encoding=V2ChunkKeyEncoding(separator="/").to_dict(),
+    )
+
+    total_t = src_shape[0]
+    for t_start in range(0, total_t, t_batch):
+        t_end = min(t_start + t_batch, total_t)
+        t_block = rdr.get_image_dask_data(
+            "TCZYX", resolution_level=src_idx, T=slice(t_start, t_end)
+        )
+        resized = resize(t_block, (t_end - t_start, *new_shape[1:]), order=0).astype(
+            dtype
+        )
+
+        da.to_zarr(
+            resized,
+            arr,
+            region=(slice(t_start, t_end),) + (slice(None),) * (resized.ndim - 1),
+            overwrite=True,
+        )
+
+    ms = group.attrs.get("multiscales", [{}])
+    datasets = ms[0].setdefault("datasets", [])
+    if datasets:
+        last_scale = datasets[-1]["coordinateTransformations"][0]["scale"]
+    else:
+        last_scale = [1] * len(scale_factors)
+    new_scale = [p * f for p, f in zip(last_scale, scale_factors)]
+
+    datasets.append(
+        {
+            "path": str(new_idx),
+            "coordinateTransformations": [
+                {"type": "scale", "scale": new_scale},
+                {"type": "translation", "translation": [0] * len(scale_factors)},
+            ],
+        }
+    )
+    group.attrs["multiscales"] = ms
+
+    print(
+        f"Added level {new_idx}: shape={new_shape}, chunks={chunks}, scale={new_scale}"
+    )
