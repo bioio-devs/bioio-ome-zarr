@@ -6,10 +6,9 @@ import dask.array as da
 import numcodecs
 import numpy as np
 import zarr
+from bioio_base.reader import Reader
 from ngff_zarr.zarr_metadata import Axis, Dataset, Metadata, Scale, Translation
 from zarr.storage import FsspecStore, LocalStore
-
-from bioio_ome_zarr import Reader
 
 from .utils import DimTuple, ZarrLevel, resize
 
@@ -133,6 +132,7 @@ class OMEZarrWriter:
                 dtype=dtype,
                 compressor=compressor,
                 zarr_format=2,
+                dimension_separator="/",
             )
             self.levels.append(ZarrLevel(shape, level_chunk_sizes[i], dtype, arr))
 
