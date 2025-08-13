@@ -9,6 +9,7 @@ import pytest
 import zarr
 from ngff_zarr.validate import validate
 
+import bioio_ome_zarr as boz
 from bioio_ome_zarr.writers import Channel, OmeZarrWriterV3
 
 from ..conftest import LOCAL_RESOURCES_DIR
@@ -61,7 +62,7 @@ def test_write_full_volume_and_metadata(
     data_generator: Any,
     expected_shapes: List[Tuple[int, ...]],
 ) -> None:
-    tmpdir = tempfile.mkdtemp()
+    tmpdir = tempfile.mkdtemp(suffix=".zarr")
     try:
         # Arrange
         data = data_generator()
@@ -93,6 +94,10 @@ def test_write_full_volume_and_metadata(
 
         ms = ome_meta["ome"]["multiscales"][0]
         assert len(ms["datasets"]) == len(expected_shapes)
+
+        assert boz.Reader.is_supported_image(tmpdir)
+        reader = boz.Reader(str(tmpdir))
+        assert reader is not None
     finally:
         shutil.rmtree(tmpdir)
 
