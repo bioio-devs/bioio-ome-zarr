@@ -270,18 +270,13 @@ class OMEZarrWriterV3:
                 request_order = "".join(ax.upper() for ax in writer_axes)
 
                 # only slice axes the reader actually has
-                # NOTE: values may be slices (e.g. T) or index lists (e.g. C)
-                # so keep it broad for mypy.
                 slice_kwargs: Dict[str, Any] = {}
                 if "t" in reader_set:
                     slice_kwargs["T"] = slice(start_t, end_t)
                 if "c" in reader_set and channel_indexes is not None:
                     slice_kwargs["C"] = channel_indexes
 
-                block = source.get_image_dask_data(
-                    request_order,
-                    **slice_kwargs,
-                )
+                block = source.get_image_dask_data(request_order, **slice_kwargs)
 
             else:
                 # Array path: already in writer order & ndim (including T)
@@ -313,10 +308,12 @@ class OMEZarrWriterV3:
                 if self.zarr_format == 2:
                     da.to_zarr(subset, self.datasets[0], region=region_one)
                 else:
+                    # Zarr v3: pass slice tuple directly; array objects aren't hashable
                     da.store(
                         subset,
                         self.datasets[0],
-                        regions={self.datasets[0]: region_one},
+                        regions=region_one,
+                        lock=True,
                     )
 
             # Lower levels: resize once, then per‑T region writes
@@ -335,10 +332,12 @@ class OMEZarrWriterV3:
                     if self.zarr_format == 2:
                         da.to_zarr(subset, self.datasets[lvl], region=region_one)
                     else:
+                        # Zarr v3
                         da.store(
                             subset,
                             self.datasets[lvl],
-                            regions={self.datasets[lvl]: region_one},
+                            regions=region_one,
+                            lock=True,
                         )
 
     # -----------------
