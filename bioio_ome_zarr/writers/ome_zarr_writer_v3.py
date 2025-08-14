@@ -9,9 +9,7 @@ import zarr
 from numcodecs import Blosc as BloscV2
 from zarr.codecs import BloscCodec, BloscShuffle
 
-from .axes import Axes
-from .channel import Channel
-from .metadata import MetadataParams, write_ngff_metadata
+from .metadata import Axes, Channel, MetadataParams, build_ngff_metadata
 from .utils import (
     chunk_size_from_memory_target,
     compute_level_chunk_sizes_zslice,
@@ -351,11 +349,11 @@ class OMEZarrWriterV3:
             store=self.store, overwrite=True, zarr_format=self.zarr_format
         )
 
-    def _write_metadata(self) -> None:
-        """Build and persist NGFF metadata (v0.4 for v2, v0.5 for v3)."""
-        if self.root is None:
-            raise RuntimeError("Store must be initialized before writing metadata.")
-
+    def preview_metadata(self) -> Dict[str, Any]:
+        """
+        Build and return the exact NGFF metadata dict(s) this writer will persist.
+        Safe to call before initializing the store; uses in-memory config/state.
+        """
         params = MetadataParams(
             image_name=self.image_name,
             axes=self.axes,
@@ -366,4 +364,16 @@ class OMEZarrWriterV3:
             root_transform=self.root_transform,
             dataset_scales=self.dataset_scales,
         )
-        write_ngff_metadata(self.root, zarr_format=self.zarr_format, params=params)
+        return build_ngff_metadata(zarr_format=self.zarr_format, params=params)
+
+    def _write_metadata(self) -> None:
+        """Persist NGFF metadata to the opened root group."""
+        if self.root is None:
+            raise RuntimeError("Store must be initialized before writing metadata.")
+
+        md = self.preview_metadata()
+        if self.zarr_format == 2:
+            self.root.attrs["multiscales"] = md["multiscales"]
+            self.root.attrs["omero"] = md["omero"]
+        else:
+            self.root.attrs.update({"ome": md["ome"]})
