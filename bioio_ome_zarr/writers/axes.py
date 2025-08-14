@@ -22,7 +22,7 @@ class Axes:
         Per-level downsample factor for each axis. Typically >1 for spatial axes.
     """
 
-    # Default NGFF axis definitions (trimmed to match ndim)
+    # Default NGFF axis definitions
     DEFAULT_NAMES: List[str] = ["t", "c", "z", "y", "x"]
     DEFAULT_TYPES: List[str] = ["time", "channel", "space", "space", "space"]
     DEFAULT_UNITS: List[Optional[str]] = [None, None, None, None, None]
@@ -107,21 +107,6 @@ class Axes:
     def index_of(self, axis_name: str) -> int:
         """
         Get the index of an axis by name (case-insensitive).
-
-        Parameters
-        ----------
-        axis_name : str
-            Axis name to search for.
-
-        Returns
-        -------
-        int
-            Index of the axis.
-
-        Raises
-        ------
-        ValueError
-            If the axis is not present.
         """
         lowered = [n.lower() for n in self.names]
         if axis_name.lower() not in lowered:

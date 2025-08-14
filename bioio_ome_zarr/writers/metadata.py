@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -8,17 +6,8 @@ import zarr
 from .axes import Axes
 from .channel import Channel
 
-# -----------------------
-# Constants
-# -----------------------
-
 OME_NGFF_VERSION_V04 = "0.4"
 OME_NGFF_VERSION_V05 = "0.5"
-
-
-# -----------------------
-# Public dataclass
-# -----------------------
 
 
 @dataclass
@@ -58,11 +47,6 @@ class MetadataParams:
     dataset_scales: Optional[List[List[float]]] = None
 
 
-# -----------------------
-# Public entry point
-# -----------------------
-
-
 def write_ngff_metadata(
     root: zarr.Group,
     *,
@@ -93,11 +77,6 @@ def write_ngff_metadata(
         root.attrs.update({"ome": ome_block})
 
 
-# -----------------------
-# Internal builders
-# -----------------------
-
-
 def _level_scale_from_dataset_scales(
     axes: Axes,
     lvl: int,
@@ -105,14 +84,6 @@ def _level_scale_from_dataset_scales(
 ) -> List[float]:
     """
     Compute per-axis scale transform for a given level.
-
-    Semantics:
-      - `dataset_scales` entries are relative SIZE vs. level 0 (e.g., 0.5).
-      - NGFF 'scale' values grow as pixel size grows, i.e. inverse of size.
-      - For spatial axes: scale = (axes.scale_0) * (1 / relative_size_l)
-      - For non-spatial axes: scale = 1.0
-      - For level 0 (no downsample): relative_size = 1.0
-
     If `dataset_scales` is None, only level 0 is expected; spatial axes use
     `axes.scales[i]` (default 1.0), and non-spatial axes use 1.0.
     """
@@ -165,7 +136,7 @@ def _build_ngff_v04(p: MetadataParams) -> tuple[List[dict], dict]:
         }
     ]
 
-    # OMERO channels: provided or synthesize defaults by inferring C
+    # OMERO
     if p.channels:
         channel_list = [ch.to_dict() for ch in p.channels]
     else:
@@ -225,7 +196,7 @@ def _build_ngff_v05(p: MetadataParams) -> dict:
 
     ome: Dict[str, Any] = {"version": OME_NGFF_VERSION_V05, "multiscales": [multiscale]}
 
-    # Optional OMERO block (0.5-style)
+    # Omero
     if p.channels:
         ome["omero"] = {
             "version": OME_NGFF_VERSION_V05,

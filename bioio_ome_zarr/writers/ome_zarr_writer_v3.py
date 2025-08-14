@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
@@ -28,16 +27,6 @@ class OMEZarrWriterV3:
     multiscale pyramid with nearest-neighbor downsampling.
     """
 
-    # -----------------------
-    # Small dataclass (levels)
-    # -----------------------
-    @dataclass
-    class ZarrLevel:
-        shape: Tuple[int, ...]
-        chunk_size: Tuple[int, ...]
-        dtype: np.dtype
-        zarray: zarr.Array
-
     def __init__(
         self,
         store: Union[str, zarr.storage.StoreLike],
@@ -61,7 +50,8 @@ class OMEZarrWriterV3:
     ) -> None:
         """
         Initialize the writer and capture core configuration. Arrays and
-        metadata are created lazily on the first write.
+        metadata are created lazily on the first write. Does not write to
+        disk until data is written.
 
         Parameters
         ----------
@@ -112,7 +102,7 @@ class OMEZarrWriterV3:
         self.dtype = np.dtype(dtype)
         self.ndim = len(self.shape)
 
-        # 2) Build an Axes instance (handles defaults internally)
+        # 2) Build an Axes instance
         self.axes = Axes(
             ndim=self.ndim,
             names=axes_names,
@@ -125,38 +115,31 @@ class OMEZarrWriterV3:
         )
 
         # 3) Compute all pyramid level shapes from `scale`
-        #    Level-0 is `shape`; each subsequent level applies element-wise
-        #    multiplication by the provided relative size tuple, clamped ≥ 1.
         self.level_shapes: List[Tuple[int, ...]] = [tuple(self.shape)]
         self.dataset_scales: List[List[float]] = []
 
         if scale is not None:
-            # Validate rank
-            for tpl in scale:  # tpl is a tuple[float, ...]
-                if len(tpl) != self.ndim:
+            for level_scale in scale:
+                if len(level_scale) != self.ndim:
                     raise ValueError(
-                        f"Each scale tuple must have length {self.ndim}; got {len(tpl)}"
+                        f"Each scale tuple must have length {self.ndim};"
+                        f" got {len(level_scale)}"
                     )
 
             # Normalize to the declared type (List[List[float]])
             self.dataset_scales = [list(map(float, tpl)) for tpl in scale]
-
-            # Build additional level shapes from the provided absolute scales
-            for vec in self.dataset_scales:  # vec is a List[float]
+            for vec in self.dataset_scales:
                 next_shape = tuple(
                     max(1, int(np.floor(self.shape[i] * vec[i])))
                     for i in range(self.ndim)
                 )
                 if next_shape == self.level_shapes[-1]:
-                    # nothing new; skip rather than break so we consider later entries
                     continue
                 self.level_shapes.append(next_shape)
 
         self.num_levels = len(self.level_shapes)
 
         # 4) Determine per-level chunk shapes
-        #    If provided, validate lengths/ndims; otherwise suggest ≈16 MiB from
-        #    level-0 and reuse. For v2 we may override with legacy per-level policy.
         self._chunk_shape_explicit: bool = chunk_shape is not None
         if chunk_shape is not None:
             if len(chunk_shape) != self.num_levels:
@@ -178,12 +161,12 @@ class OMEZarrWriterV3:
             )
             self.chunk_shapes_per_level = [suggested for _ in range(self.num_levels)]
 
-        # 5) Layout & codec preferences
+        # 5) formating and compression
         self.zarr_format = zarr_format
-        self.shard_factor = shard_factor  # ignored for v2 arrays
+        self.shard_factor = shard_factor
         self.compressor = compressor
 
-        # 6) Metadata fields (passed to metadata builder later)
+        # 6) Metadata fields
         self.image_name = image_name or "Image"
         self.channels = channels
         self.rdefs = rdefs
@@ -193,7 +176,6 @@ class OMEZarrWriterV3:
         # 8) Handles & state
         self.root: Optional[zarr.Group] = None
         self.datasets: List[zarr.Array] = []
-        self.levels: List[OMEZarrWriterV3.ZarrLevel] = []
         self._initialized: bool = False
         self._metadata_written: bool = False
 
@@ -244,7 +226,6 @@ class OMEZarrWriterV3:
         if not self._initialized:
             self._initialize()
 
-        # Locate the time axis (raises if absent)
         try:
             axis_t = self.axes.index_of("t")
         except ValueError:
@@ -304,7 +285,6 @@ class OMEZarrWriterV3:
             compressor = self.compressor
 
         self.datasets = []
-        self.levels = []
 
         if self.zarr_format == 2:
             # v2
@@ -335,11 +315,6 @@ class OMEZarrWriterV3:
                     dimension_separator="/",
                 )
                 self.datasets.append(arr)
-                self.levels.append(
-                    OMEZarrWriterV3.ZarrLevel(
-                        shape=shape, chunk_size=chunks_lvl, dtype=self.dtype, zarray=arr
-                    )
-                )
         else:
             # v3
             for lvl, shape in enumerate(self.level_shapes):
@@ -358,19 +333,12 @@ class OMEZarrWriterV3:
                     )
                 arr = self.root.create_array(**kwargs)
                 self.datasets.append(arr)
-                self.levels.append(
-                    OMEZarrWriterV3.ZarrLevel(
-                        shape=shape,
-                        chunk_size=chunks_lvl,
-                        dtype=self.dtype,
-                        zarray=arr,
-                    )
-                )
 
-        # Write multiscale + OMERO metadata
-        self._write_metadata_according_to_format()
-        self._initialized = True
+        # Write metadata
+        self._write_metadata()
         self._metadata_written = True
+
+        self._initialized = True
 
     def _open_root(self) -> zarr.Group:
         """Accept a path/URL or Store-like and return an opened root group."""
@@ -383,7 +351,7 @@ class OMEZarrWriterV3:
             store=self.store, overwrite=True, zarr_format=self.zarr_format
         )
 
-    def _write_metadata_according_to_format(self) -> None:
+    def _write_metadata(self) -> None:
         """Build and persist NGFF metadata (v0.4 for v2, v0.5 for v3)."""
         if self.root is None:
             raise RuntimeError("Store must be initialized before writing metadata.")
@@ -396,7 +364,6 @@ class OMEZarrWriterV3:
             rdefs=self.rdefs,
             creator_info=self.creator_info,
             root_transform=self.root_transform,
-            # hand off per-level relative sizes so metadata scales can be derived
             dataset_scales=self.dataset_scales,
         )
         write_ngff_metadata(self.root, zarr_format=self.zarr_format, params=params)

@@ -14,18 +14,11 @@ from ngff_zarr import from_ngff_zarr
 from ngff_zarr.validate import validate
 
 from bioio_ome_zarr.writers import (
-    OmeZarrWriterV3,  # keep this alias to match existing suite
-)
-from bioio_ome_zarr.writers import (
     DimTuple,
-    chunk_size_from_memory_target,
+    OmeZarrWriterV3,
 )
 
 from ..conftest import array_constructor
-
-# -----------------------
-# Helpers
-# -----------------------
 
 
 def _scales_from_expected_shapes(
@@ -89,43 +82,14 @@ def _scales_from_factors_until_one(
     return tuple(scales)
 
 
-# -----------------------
-# Existing chunk helper test (unchanged)
-# -----------------------
-
-
-@pytest.mark.parametrize(
-    "input_shape, dtype, memory_target, expected_chunk_shape",
-    [
-        ((1, 1, 1, 128, 128), np.uint16, 1024, (1, 1, 1, 16, 16)),
-        ((1, 1, 1, 127, 127), np.uint16, 1024, (1, 1, 1, 15, 15)),
-        ((1, 1, 1, 129, 129), np.uint16, 1024, (1, 1, 1, 16, 16)),
-        ((7, 11, 128, 128, 128), np.uint16, 1024, (1, 1, 8, 8, 8)),
-    ],
-)
-def test_chunk_size_from_memory_target(
-    input_shape: DimTuple,
-    dtype: np.dtype,
-    memory_target: int,
-    expected_chunk_shape: DimTuple,
-) -> None:
-    chunk_shape = chunk_size_from_memory_target(input_shape, dtype, memory_target)
-    assert chunk_shape == expected_chunk_shape
-
-
-# -----------------------
-# Legacy V2 writer parity — now using new API
-# -----------------------
-
-
 @array_constructor
 @pytest.mark.parametrize(
     "shape, num_levels, scaling, expected_shapes",
     [
         (
-            (4, 2, 2, 64, 32),  # powers of two
+            (4, 2, 2, 64, 32),
             3,
-            (1, 1, 1, 2, 2),  # downscale xy by two
+            (1, 1, 1, 2, 2),  # downscale xy by 2
             [(4, 2, 2, 64, 32), (4, 2, 2, 32, 16), (4, 2, 2, 16, 8)],
         ),
         (
