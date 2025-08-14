@@ -153,7 +153,7 @@ for t in range(shape[0]):
 Import the writer and channel class:
 
 ```python
-from bioio_ome_zarr.writers import OmeZarrWriterV3, Channel
+from bioio_ome_zarr.writers import OMEZarrWriter, Channel
 import numpy as np
 ```
 
@@ -206,7 +206,7 @@ data = np.random.randint(0, 255, size=shape, dtype=np.uint8)
 # Optional: build channel metadata
 channels = [Channel(label=f"c{i}", color="FF0000") for i in range(shape[1])]
 
-writer = OmeZarrWriterV3(
+writer = OMEZarrWriter(
     store="output_full_volume.zarr",
     shape=shape,
     dtype=data.dtype,
@@ -235,7 +235,7 @@ writer.write_full_volume(data)
 shape = (3, 2, 2, 4, 4)
 data = np.random.randint(0,255,size=shape,dtype=np.uint8)
 
-writer = OmeZarrWriterV3(
+writer = OMEZarrWriter(
     store="out_time.zarr",
     shape=shape,
     dtype=data.dtype,
@@ -257,7 +257,7 @@ To include a coordinate transform at the multiscale root, pass `multiscale_scale
 ```python
 scale0 = [0.1,0.1,0.1,0.1,0.1]
 
-writer = OmeZarrWriterV3(
+writer = OMEZarrWriter(
     store="out_with_scale.zarr",
     shape=(1,1,1,4,4),
     dtype="uint8",

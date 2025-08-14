@@ -9,7 +9,7 @@ import zarr
 from ngff_zarr.validate import validate
 
 from bioio_ome_zarr.reader import Reader
-from bioio_ome_zarr.writers import Channel, OmeZarrWriterV3
+from bioio_ome_zarr.writers import Channel, OMEZarrWriter
 from bioio_ome_zarr.writers.utils import DimTuple
 
 from ..conftest import LOCAL_RESOURCES_DIR
@@ -195,7 +195,7 @@ def test_write_pyramid(
     if axes_names:
         kwargs["axes_names"] = axes_names
 
-    writer = OmeZarrWriterV3(**kwargs)
+    writer = OMEZarrWriter(**kwargs)
 
     # Act
     writer.write_full_volume(data)
@@ -279,7 +279,7 @@ def test_write_timepoints_array(
     # Arrange
     src = np.arange(np.prod(src_shape), dtype=np.uint16).reshape(src_shape)
     out_store = tmp_path / "out_array.zarr"
-    writer = OmeZarrWriterV3(
+    writer = OMEZarrWriter(
         store=str(out_store),
         shape=writer_shape,
         dtype=src.dtype,
@@ -407,7 +407,7 @@ def test_write_timepoints_reader(
     reader = Reader(str(in_store))
 
     out_store = tmp_path / "out_reader.zarr"
-    writer = OmeZarrWriterV3(
+    writer = OMEZarrWriter(
         store=str(out_store),
         shape=writer_shape,
         dtype=src.dtype,
@@ -457,7 +457,7 @@ def test_v3_sharding_and_chunking(
     # Arrange
     data = np.zeros(shape, dtype=np.uint8)
     store = str(tmp_path / "test_highdim_v3.zarr")
-    writer = OmeZarrWriterV3(
+    writer = OMEZarrWriter(
         store=store,
         shape=shape,
         dtype=data.dtype,
@@ -537,7 +537,7 @@ def test_v3_metadata_against_reference(
     store_dir = str(tmp_path / "ref_test_v3.zarr")
     chunk_shape = tuple(tuple(chunk_size) for _ in range(1 + len(scale)))
 
-    writer = OmeZarrWriterV3(
+    writer = OMEZarrWriter(
         store=store_dir,
         shape=shape,
         dtype="uint8",
@@ -682,7 +682,7 @@ def test_full_vs_timepoints_equivalence(
     tp_store = str(tmp_path / "tp.zarr")
     chunk_shape = tuple(tuple(chunk_size) for _ in range(1 + len(scale)))
 
-    w_full = OmeZarrWriterV3(
+    w_full = OMEZarrWriter(
         store=full_store,
         shape=shape,
         dtype=data.dtype,
@@ -693,7 +693,7 @@ def test_full_vs_timepoints_equivalence(
         chunk_shape=chunk_shape,
         shard_factor=shard_factor,
     )
-    w_tp = OmeZarrWriterV3(
+    w_tp = OMEZarrWriter(
         store=tp_store,
         shape=shape,
         dtype=data.dtype,

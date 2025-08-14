@@ -18,9 +18,9 @@ from .utils import (
 )
 
 
-class OMEZarrWriterV3:
+class OMEZarrWriter:
     """
-    OMEZarrWriterV3 is a unified OME-Zarr writer that targets either Zarr v2
+    OMEZarrWriter is a unified OME-Zarr writer that targets either Zarr v2
     (NGFF 0.4) or Zarr v3 (NGFF 0.5) with the same public API. Supports
     2 ≤ N ≤ 5 dimensions (e.g., YX, ZYX, TYX, CZYX, or TCZYX) and writes a
     multiscale pyramid with nearest-neighbor downsampling.

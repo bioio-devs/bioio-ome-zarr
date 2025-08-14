@@ -1,4 +1,5 @@
 import logging
+import warnings
 from dataclasses import asdict
 from typing import List, Optional, Tuple, Union
 
@@ -73,6 +74,15 @@ class OMEZarrWriter:
     """Class to write OME-Zarr files."""
 
     def __init__(self) -> None:
+        warnings.warn(
+            (
+                "OmeZarrWriterV2 is deprecated and will be removed in"
+                " a future release. Please use OMEZarrWriter instead."
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         self.output_path = ""
         self.levels: List[ZarrLevel] = []
         self.store = None

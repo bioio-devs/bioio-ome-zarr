@@ -59,7 +59,7 @@ bioio-ome-zarr = "bioio_ome_zarr"
 
 [project.entry-points."bioio.writers"]
 OmeZarrWriterV2 = "bioio_ome_zarr.writers:OmeZarrWriterV2"
-OmeZarrWriterV3 = "bioio_ome_zarr.writers:OmeZarrWriterV3"
+OMEZarrWriter = "bioio_ome_zarr.writers:OMEZarrWriter"
 
 # build settings
 # https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html
