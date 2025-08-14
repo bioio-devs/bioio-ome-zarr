@@ -7,10 +7,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 OME_NGFF_VERSION_V04 = "0.4"
 OME_NGFF_VERSION_V05 = "0.5"
 
-# ======================================================================
-# Axis & Channel helpers
-# ======================================================================
-
 
 class Axes:
     """
@@ -137,11 +133,6 @@ class Channel:
         }
 
 
-# ======================================================================
-# Metadata params & builders (pure organization — no writing here)
-# ======================================================================
-
-
 @dataclass
 class MetadataParams:
     """
@@ -185,7 +176,7 @@ def build_ngff_metadata(
     params: MetadataParams,
 ) -> Dict[str, Any]:
     """
-    Build (but do not write) NGFF metadata dicts for the given zarr_format.
+    Build NGFF metadata dicts for the given zarr_format.
 
     Returns
     -------
