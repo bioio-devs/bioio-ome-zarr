@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -6,32 +8,44 @@ import zarr
 from .axes import Axes
 from .channel import Channel
 
+# -----------------------
+# Constants
+# -----------------------
+
 OME_NGFF_VERSION_V04 = "0.4"
 OME_NGFF_VERSION_V05 = "0.5"
+
+
+# -----------------------
+# Public dataclass
+# -----------------------
 
 
 @dataclass
 class MetadataParams:
     """
-    Container for metadata inputs required to generate NGFF records.
+    Parameters required to render NGFF metadata.
 
-    Parameters
-    ----------
+    Fields
+    ------
     image_name : str
-        Name recorded in the multiscales metadata.
+        Display name of the image.
     axes : Axes
-        Axes object describing names/types/units/scales/factors.
+        Axes descriptor (names/types/units/scales).
     level_shapes : Sequence[Tuple[int, ...]]
-        Shapes for each pyramid level (same axis order as ``axes``).
+        Per-level array shapes, including level 0.
     channels : Optional[List[Channel]]
-        OMERO‑style channels. If None, channels are synthesized from shape.
+        OMERO-style channel metadata; if None, defaults are inferred.
     rdefs : Optional[Dict[str, Any]]
-        Optional OMERO rendering defaults (e.g., {"defaultT": 0, ...}).
+        OMERO rendering defaults (placed under ome->omero->rdefs for 0.5).
     creator_info : Optional[Dict[str, Any]]
-        Optional creator block (only written for NGFF 0.5).
+        Optional creator block stored under ome->_creator (0.5).
     root_transform : Optional[Dict[str, Any]]
-        Optional multiscale root coordinate transformation (NGFF 0.5), e.g.:
-        {"type":"scale","scale":[...]}.
+        Optional transform at the multiscale root.
+    dataset_scales : Optional[List[List[float]]]
+        For levels > 0, per-axis *relative size vs. level 0*.
+        Example: for level 1 where spatial dims halve, use [1,1,1,0.5,0.5].
+        If None, only level 0 is expected.
     """
 
     image_name: str
@@ -41,6 +55,7 @@ class MetadataParams:
     rdefs: Optional[Dict[str, Any]] = None
     creator_info: Optional[Dict[str, Any]] = None
     root_transform: Optional[Dict[str, Any]] = None
+    dataset_scales: Optional[List[List[float]]] = None
 
 
 # -----------------------
@@ -55,59 +70,88 @@ def write_ngff_metadata(
     params: MetadataParams,
 ) -> None:
     """
-    Write NGFF metadata to a Zarr group.
+    Write NGFF metadata to the Zarr group attributes.
+
+    For Zarr v2: writes NGFF 0.4 `multiscales` and `omero`.
+    For Zarr v3: writes NGFF 0.5 `ome` with `multiscales` (and optional `omero`).
 
     Parameters
     ----------
     root : zarr.Group
-        Already‑opened root group to write attributes on.
+        Opened Zarr group to receive attributes.
     zarr_format : int
-        2 → NGFF 0.4 ("multiscales" + "omero"); 3 → NGFF 0.5 ("ome").
+        2 for NGFF 0.4 layout; 3 for NGFF 0.5.
     params : MetadataParams
-        Inputs used to construct the metadata blocks.
+        Metadata inputs (axes, level shapes, channels, etc.).
     """
     if zarr_format == 2:
-        multiscales, omero = _build_ngff_v04_from_axes_channels(params)
+        multiscales, omero = _build_ngff_v04(params)
         root.attrs["multiscales"] = multiscales
         root.attrs["omero"] = omero
     else:
-        ome_block = _build_ngff_v05_ome_block(params)
+        ome_block = _build_ngff_v05(params)
         root.attrs.update({"ome": ome_block})
 
 
 # -----------------------
-# Private builders
+# Internal builders
 # -----------------------
 
 
-def _build_ngff_v04_from_axes_channels(
-    p: MetadataParams,
-) -> tuple[List[dict], dict]:
+def _level_scale_from_dataset_scales(
+    axes: Axes,
+    lvl: int,
+    dataset_scales: Optional[List[List[float]]],
+) -> List[float]:
     """
-    Build NGFF 0.4 records for a Zarr v2 root.
+    Compute per-axis scale transform for a given level.
 
-    Returns
-    -------
-    (multiscales_list, omero_dict)
-        multiscales_list : List[dict]
-            Single‑entry list containing axes + per‑level dataset transforms.
-        omero_dict : dict
-            OMERO block with channel list and rdefs.
+    Semantics:
+      - `dataset_scales` entries are relative SIZE vs. level 0 (e.g., 0.5).
+      - NGFF 'scale' values grow as pixel size grows, i.e. inverse of size.
+      - For spatial axes: scale = (axes.scale_0) * (1 / relative_size_l)
+      - For non-spatial axes: scale = 1.0
+      - For level 0 (no downsample): relative_size = 1.0
+
+    If `dataset_scales` is None, only level 0 is expected; spatial axes use
+    `axes.scales[i]` (default 1.0), and non-spatial axes use 1.0.
     """
-    dims = tuple(p.axes.names)
+    out: List[float] = []
+    for i, ax_type in enumerate(axes.types):
+        base = float(axes.scales[i] if i < len(axes.scales) else 1.0)
+        if ax_type == "space":
+            if lvl == 0 or dataset_scales is None:
+                out.append(base)
+            else:
+                rel_size = float(dataset_scales[lvl - 1][i])
+                rel_size = rel_size if rel_size != 0.0 else 1.0
+                out.append(base * (1.0 / rel_size))
+        else:
+            out.append(1.0)
+    return out
 
-    # 1) Axes list
+
+def _build_ngff_v04(p: MetadataParams) -> tuple[List[dict], dict]:
+    """
+    Build NGFF 0.4 `multiscales` and `omero` dicts.
+    """
+    # Axes list (name/type and optional unit)
     axes_list = p.axes.to_metadata()
 
-    # 2) Per‑level datasets (scale + zero translation)
-    datasets: List[Dict[str, Any]] = []
+    # Per-level datasets with scale + zero translation
+    datasets = []
     for lvl in range(len(p.level_shapes)):
         datasets.append(
             {
                 "path": str(lvl),
                 "coordinateTransformations": [
-                    {"type": "scale", "scale": p.axes.scales_for_level(lvl)},
-                    {"type": "translation", "translation": [0.0 for _ in dims]},
+                    {
+                        "type": "scale",
+                        "scale": _level_scale_from_dataset_scales(
+                            p.axes, lvl, p.dataset_scales
+                        ),
+                    },
+                    {"type": "translation", "translation": [0.0 for _ in p.axes.names]},
                 ],
             }
         )
@@ -121,7 +165,7 @@ def _build_ngff_v04_from_axes_channels(
         }
     ]
 
-    # 3) Channels (use provided list or synthesize defaults by inferring C)
+    # OMERO channels: provided or synthesize defaults by inferring C
     if p.channels:
         channel_list = [ch.to_dict() for ch in p.channels]
     else:
@@ -134,7 +178,7 @@ def _build_ngff_v04_from_axes_channels(
             Channel(label=f"C:{i}", color="ffffff").to_dict() for i in range(C)
         ]
 
-    # 4) DefaultZ for rdefs (middle plane if Z exists; else 0/1 sizing)
+    # defaultZ for rdefs
     try:
         z_axis = p.axes.index_of("z")
         size_z = int(p.level_shapes[0][z_axis])
@@ -151,43 +195,37 @@ def _build_ngff_v04_from_axes_channels(
     return multiscales, omero
 
 
-def _build_ngff_v05_ome_block(p: MetadataParams) -> dict:
+def _build_ngff_v05(p: MetadataParams) -> dict:
     """
-    Build NGFF 0.5 "ome" block for a Zarr v3 root.
-
-    Returns
-    -------
-    ome : dict
-        Object placed under root.attrs["ome"]. Contains a single multiscale
-        entry and, optionally, an OMERO block and _creator info.
+    Build NGFF 0.5 `ome` block with multiscales and optional OMERO.
     """
-    # 1) Axes
+    # axes
     axes_list = p.axes.to_metadata()
 
-    # 2) Per‑level datasets (spatial scale only at dataset level)
-    datasets: List[Dict[str, Any]] = []
+    # datasets: per-level spatial scale only
+    datasets = []
     for lvl in range(len(p.level_shapes)):
         datasets.append(
             {
                 "path": str(lvl),
                 "coordinateTransformations": [
-                    {"type": "scale", "scale": p.axes.scales_for_level(lvl)}
+                    {
+                        "type": "scale",
+                        "scale": _level_scale_from_dataset_scales(
+                            p.axes, lvl, p.dataset_scales
+                        ),
+                    }
                 ],
             }
         )
 
-    # 3) Top‑level multiscale entry (optional root transform)
-    multiscale: Dict[str, Any] = {
-        "name": p.image_name,
-        "axes": axes_list,
-        "datasets": datasets,
-    }
+    multiscale = {"name": p.image_name, "axes": axes_list, "datasets": datasets}
     if p.root_transform is not None:
         multiscale["coordinateTransformations"] = [p.root_transform]
 
     ome: Dict[str, Any] = {"version": OME_NGFF_VERSION_V05, "multiscales": [multiscale]}
 
-    # 4) Optional OMERO block + rdefs
+    # Optional OMERO block (0.5-style)
     if p.channels:
         ome["omero"] = {
             "version": OME_NGFF_VERSION_V05,
@@ -196,7 +234,6 @@ def _build_ngff_v05_ome_block(p: MetadataParams) -> dict:
         if p.rdefs is not None:
             ome["omero"]["rdefs"] = p.rdefs
 
-    # 5) Optional creator info (non‑standard convenience field)
     if p.creator_info:
         ome["_creator"] = p.creator_info
 

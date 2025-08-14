@@ -23,6 +23,76 @@ from bioio_ome_zarr.writers import (
 
 from ..conftest import array_constructor
 
+# -----------------------
+# Helpers
+# -----------------------
+
+
+def _scales_from_expected_shapes(
+    expected_shapes: List[Tuple[int, ...]],
+) -> Tuple[Tuple[float, ...], ...]:
+    """
+    Build per-level 'scale' entries (relative sizes vs. level-0) from
+    the expected_shapes already declared in the parametrization.
+
+    For L > 0:
+      scale[L-1][i] = shape_L[i] / shape_0[i]
+    """
+    base = np.array(expected_shapes[0], dtype=float)
+    scales: List[Tuple[float, ...]] = []
+    for s in expected_shapes[1:]:
+        scales.append(tuple(np.array(s, dtype=float) / base))
+    return tuple(scales)
+
+
+def _spatial_mask_from_axes_types(axes_types: List[str]) -> List[bool]:
+    return [t == "space" for t in axes_types]
+
+
+def _scales_from_factors_until_one(
+    base_shape: Tuple[int, ...],
+    factors: Tuple[int, ...],
+    axes_types: List[str],
+) -> Tuple[Tuple[float, ...], ...]:
+    """
+    Produce a sequence of 'scale' entries from integer per-axis factors,
+    reducing only spatial axes by their factor each level until no change.
+
+    Relative size vs level-0 for level k (k>=1):
+      spatial: 1 / (factor ** k)
+      non-spatial: 1.0
+    """
+    spatial_mask = _spatial_mask_from_axes_types(axes_types)
+    ndim = len(base_shape)
+    curr = list(base_shape)
+    k = 1
+    scales: List[Tuple[float, ...]] = []
+    while True:
+        rel: List[float] = []
+        would_change = False
+        for i in range(ndim):
+            if spatial_mask[i]:
+                rel_i = 1.0 / (float(factors[i]) ** float(k))
+                next_abs = max(1, int(np.floor(base_shape[i] * rel_i)))
+                if next_abs < curr[i]:
+                    would_change = True
+                rel.append(rel_i)
+            else:
+                rel.append(1.0)
+        if not would_change:
+            break
+        scales.append(tuple(rel))
+        curr = [
+            max(1, int(np.floor(base_shape[i] * scales[-1][i]))) for i in range(ndim)
+        ]
+        k += 1
+    return tuple(scales)
+
+
+# -----------------------
+# Existing chunk helper test (unchanged)
+# -----------------------
+
 
 @pytest.mark.parametrize(
     "input_shape, dtype, memory_target, expected_chunk_shape",
@@ -41,6 +111,11 @@ def test_chunk_size_from_memory_target(
 ) -> None:
     chunk_shape = chunk_size_from_memory_target(input_shape, dtype, memory_target)
     assert chunk_shape == expected_chunk_shape
+
+
+# -----------------------
+# Legacy V2 writer parity — now using new API
+# -----------------------
 
 
 @array_constructor
@@ -81,18 +156,18 @@ def test_write_ome_zarr(
     im = array_constructor(shape, dtype=np.uint8)
     C = shape[1]
 
-    # Create a V3 writer configured to emit Zarr v2 + NGFF 0.4
+    # v2 + NGFF 0.4 with NEW API: derive per-level 'scale' from expected shapes
     save_uri = tmp_path / filename
+    scale = _scales_from_expected_shapes(expected_shapes)
+
     writer = OmeZarrWriterV3(
         store=str(save_uri),
         shape=shape,
         dtype=im.dtype,
-        scale_factors=tuple(int(s) for s in scaling),  # ensure ints
-        num_levels=num_levels,
         axes_names=["t", "c", "z", "y", "x"],
-        zarr_format=2,  # << write Zarr v2
-        # ngff_version="0.4"
+        zarr_format=2,  # write Zarr v2
         image_name="TEST",
+        scale=scale,  # <- per-level relative sizes vs level 0
     )
 
     # Write the whole volume (writer handles pyramid + metadata)
@@ -143,17 +218,18 @@ def test_write_ome_zarr_iterative(
     # TCZYX order
     im = array_constructor(shape, dtype=np.uint8)
 
-    # V3 writer configured for Zarr v2 + NGFF 0.4
+    # v2 + NGFF 0.4 with NEW API
     save_uri = tmp_path / filename
+    scale = _scales_from_expected_shapes(expected_shapes)
+
     writer = OmeZarrWriterV3(
         store=str(save_uri),
         shape=shape,
         dtype=im.dtype,
-        scale_factors=tuple(int(s) for s in scaling),
-        num_levels=num_levels,
         axes_names=["t", "c", "z", "y", "x"],
         zarr_format=2,
         image_name="TEST",
+        scale=scale,
     )
 
     # Write iteratively, one timepoint at a time
@@ -230,14 +306,14 @@ def test_write_full_volume_and_metadata_v2_lowerdim(
     try:
         # Arrange
         data = data_generator()
+        scale = _scales_from_expected_shapes(expected_shapes)
+
         writer_kwargs = {
             "store": tmpdir,
             "shape": shape,
             "dtype": data.dtype,
-            # simple “downsample by 2” on every axis present
-            "scale_factors": tuple(2 for _ in shape),
-            "num_levels": None,
-            "zarr_format": 2,
+            "scale": scale,  # per-level relative sizes vs level 0
+            "zarr_format": 2,  # NGFF 0.4
         }
         if axes_names:
             writer_kwargs["axes_names"] = axes_names
@@ -317,14 +393,18 @@ def test_full_vs_timepoint_equivalence_v2(
     full_store = str(tmp_path / "full_v2.zarr")
     tp_store = str(tmp_path / "tp_v2.zarr")
 
+    # Build per-level 'scale' from integer per-axis factors
+    scale = _scales_from_factors_until_one(
+        shape, tuple(int(x) for x in factors), axes_types
+    )
+
     w_full = OmeZarrWriterV3(
         store=full_store,
         shape=shape,
         dtype=data.dtype,
         axes_names=axes_names,
         axes_types=axes_types,
-        scale_factors=factors,
-        num_levels=None,
+        scale=scale,
         zarr_format=2,  # NGFF 0.4
     )
     w_tp = OmeZarrWriterV3(
@@ -333,8 +413,7 @@ def test_full_vs_timepoint_equivalence_v2(
         dtype=data.dtype,
         axes_names=axes_names,
         axes_types=axes_types,
-        scale_factors=factors,
-        num_levels=None,
+        scale=scale,
         zarr_format=2,  # NGFF 0.4
     )
 

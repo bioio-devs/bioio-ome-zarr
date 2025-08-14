@@ -13,10 +13,82 @@ from bioio_ome_zarr.writers import Channel, OmeZarrWriterV3
 
 from ..conftest import LOCAL_RESOURCES_DIR
 
+# -----------------------
+# Helpers
+# -----------------------
+
+
+def _scales_from_expected_shapes(
+    expected_shapes: List[Tuple[int, ...]],
+) -> Tuple[Tuple[float, ...], ...]:
+    """
+    Build per-level 'scale' entries (relative sizes vs. level-0) from the
+    expected_shapes the test already declares. For each level L>0:
+      scale[L-1][i] = shape_L[i] / shape_0[i]
+    """
+    base = np.array(expected_shapes[0], dtype=float)
+    scales: List[Tuple[float, ...]] = []
+    for s in expected_shapes[1:]:
+        scales.append(tuple(np.array(s, dtype=float) / base))
+    return tuple(scales)
+
+
+def _scales_from_factors_until_one(
+    base_shape: Tuple[int, ...],
+    factors: Tuple[int, ...],
+    spatial_mask: List[bool],
+) -> Tuple[Tuple[float, ...], ...]:
+    """
+    Create a sequence of 'scale' entries where each subsequent level reduces
+    only the spatial axes by their factor until they reach 1 element, using
+    relative size vs. level-0. For level k (k>=1), relative size on axis i is:
+      1 / (factors[i] ** k)  for spatial axes
+      1.0                    for non-spatial axes
+    Stops when further downsampling would not change shape (i.e., all
+    spatial dims already at 1).
+    """
+    ndim = len(base_shape)
+    # current absolute sizes we track (start from base)
+    curr = list(base_shape)
+    k = 1
+    scales: List[Tuple[float, ...]] = []
+    while True:
+        rel = []
+        would_change = False
+        for i in range(ndim):
+            if spatial_mask[i]:
+                rel_i = 1.0 / (float(factors[i]) ** float(k))
+                # Compute proposed next absolute size for early stop
+                next_abs = max(1, int(np.floor(base_shape[i] * rel_i)))
+                if next_abs < curr[i]:
+                    would_change = True
+                rel.append(rel_i)
+            else:
+                rel.append(1.0)
+        if not would_change:
+            break
+        scales.append(tuple(rel))
+        # update curr by applying this relative to base
+        curr = [
+            max(1, int(np.floor(base_shape[i] * scales[-1][i]))) for i in range(ndim)
+        ]
+        k += 1
+    return tuple(scales)
+
+
+def _spatial_mask_from_axes_types(axes_types: List[str]) -> List[bool]:
+    return [t == "space" for t in axes_types]
+
+
+# -----------------------
+# Tests
+# -----------------------
+
 
 @pytest.mark.parametrize(
     "shape, axes_names, axes_types, data_generator, expected_shapes",
     [
+        # 2D (YX) — automatic axes defaults (last N of t,c,z,y,x)
         (
             (4, 4),
             None,
@@ -24,6 +96,7 @@ from ..conftest import LOCAL_RESOURCES_DIR
             lambda: np.arange(16, dtype=np.uint8).reshape((4, 4)),
             [(4, 4), (2, 2), (1, 1)],
         ),
+        # 3D (defaults to ZYX when axes_names=None): downsample Y/X only
         (
             (4, 8, 8),
             None,
@@ -31,6 +104,7 @@ from ..conftest import LOCAL_RESOURCES_DIR
             lambda: np.random.randint(0, 255, size=(4, 8, 8), dtype=np.uint8),
             [(4, 8, 8), (4, 4, 4), (4, 2, 2), (4, 1, 1)],
         ),
+        # 4D (TZYX)
         (
             (3, 4, 8, 8),
             ["t", "z", "y", "x"],
@@ -38,6 +112,7 @@ from ..conftest import LOCAL_RESOURCES_DIR
             lambda: np.random.randint(0, 255, size=(3, 4, 8, 8), dtype=np.uint8),
             [(3, 4, 8, 8), (3, 4, 4, 4), (3, 4, 2, 2), (3, 4, 1, 1)],
         ),
+        # 4D (CZYX)
         (
             (2, 4, 8, 8),
             ["c", "z", "y", "x"],
@@ -45,6 +120,7 @@ from ..conftest import LOCAL_RESOURCES_DIR
             lambda: np.random.randint(0, 255, size=(2, 4, 8, 8), dtype=np.uint8),
             [(2, 4, 8, 8), (2, 4, 4, 4), (2, 4, 2, 2), (2, 4, 1, 1)],
         ),
+        # 5D (TCZYX) minimal case
         (
             (1, 1, 1, 4, 4),
             ["t", "c", "z", "y", "x"],
@@ -65,12 +141,14 @@ def test_write_full_volume_and_metadata(
     try:
         # Arrange
         data = data_generator()
+
+        scale = _scales_from_expected_shapes(expected_shapes)
+
         writer_kwargs = {
             "store": tmpdir,
             "shape": shape,
             "dtype": data.dtype,
-            "scale_factors": tuple(2 for _ in shape),
-            "num_levels": None,
+            "scale": scale,
         }
         if axes_names:
             writer_kwargs["axes_names"] = axes_names
@@ -113,15 +191,15 @@ def test_sharding_and_chunking_applied_to_arrays_high_dim(
     chunk_size: Tuple[int, ...],
     shard_factor: Tuple[int, ...],
 ) -> None:
-    # Arrange
+    # Arrange (single level is fine; this test focuses on chunks/shards)
     data = np.zeros(shape, dtype=np.uint8)
     store = str(tmp_path / "test_highdim.zarr")
     writer = OmeZarrWriterV3(
         store=store,
         shape=shape,
         dtype=data.dtype,
-        scale_factors=(1, 1, 1, 2, 2),
-        chunk_size=chunk_size,
+        scale=None,  # only level-0
+        chunk_shape=(chunk_size,),  # per-level tuple(s)
         shard_factor=shard_factor,
     )
 
@@ -132,21 +210,20 @@ def test_sharding_and_chunking_applied_to_arrays_high_dim(
     grp = zarr.open(store, mode="r")
     for lvl, lvl_shape in enumerate(writer.level_shapes):
         arr = grp[str(lvl)]
-        # chunk_size is uniform
-        assert arr.chunks == writer.chunk_size
+        # chunk is as requested
+        assert arr.chunks == chunk_size
 
-        # shard_factor is uniform
+        # shard_factor is applied for v3
         if writer.shard_factor is not None:
-            expected_shard_factor = tuple(
-                writer.chunk_size[i] * writer.shard_factor[i]
-                for i in range(len(lvl_shape))
+            expected_shard = tuple(
+                chunk_size[i] * writer.shard_factor[i] for i in range(len(lvl_shape))
             )
-            assert arr.shards == expected_shard_factor
+            assert arr.shards == expected_shard
 
 
 @pytest.mark.parametrize(
-    "shape, axes_names, axes_types, axes_units, axes_scale, scale_factors, "
-    "channel_kwargs, chunk_size, shard_factor, filename",
+    "shape, axes_names, axes_types, axes_units, physical_pixel_size, "
+    "factors, channel_kwargs, chunk_size, shard_factor, filename",
     [
         (
             (1, 1, 1, 4, 4),
@@ -188,8 +265,8 @@ def test_metadata_against_reference(
     axes_names: Any,
     axes_types: Any,
     axes_units: Any,
-    axes_scale: Any,
-    scale_factors: Any,
+    physical_pixel_size: Any,
+    factors: Any,
     channel_kwargs: Any,
     chunk_size: Any,
     shard_factor: Any,
@@ -199,6 +276,16 @@ def test_metadata_against_reference(
     data = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
     ch0 = Channel(**channel_kwargs)
     store_dir = str(tmp_path / "ref_test.zarr")
+
+    # Build spatial mask and per-level 'scale' from per-axis integer factors
+    spatial_mask = _spatial_mask_from_axes_types(axes_types)
+    scale = _scales_from_factors_until_one(
+        shape, tuple(int(x) for x in factors), spatial_mask
+    )
+
+    # Repeat the requested chunk_size for each level
+    chunk_shape = tuple(tuple(chunk_size) for _ in range(1 + len(scale)))
+
     writer = OmeZarrWriterV3(
         store=store_dir,
         shape=shape,
@@ -206,10 +293,9 @@ def test_metadata_against_reference(
         axes_names=axes_names,
         axes_types=axes_types,
         axes_units=axes_units,
-        axes_scale=axes_scale,
-        scale_factors=scale_factors,
-        num_levels=None,
-        chunk_size=chunk_size,
+        physical_pixel_size=physical_pixel_size,
+        scale=scale,
+        chunk_shape=chunk_shape,
         shard_factor=shard_factor,
         channels=[ch0],
         creator_info={"name": "pytest", "version": "0.1"},
@@ -282,15 +368,18 @@ def test_full_vs_timepoint_equivalence(
     full_store = str(tmp_path / "full.zarr")
     tp_store = str(tmp_path / "tp.zarr")
 
+    spatial_mask = _spatial_mask_from_axes_types(axes_types)
+    scale = _scales_from_factors_until_one(shape, factors, spatial_mask)
+    chunk_shape = tuple(tuple(chunk_size) for _ in range(1 + len(scale)))
+
     w_full = OmeZarrWriterV3(
         store=full_store,
         shape=shape,
         dtype=data.dtype,
         axes_names=axes_names,
         axes_types=axes_types,
-        scale_factors=factors,
-        num_levels=None,
-        chunk_size=chunk_size,
+        scale=scale,
+        chunk_shape=chunk_shape,
         shard_factor=shard_factor,
     )
     w_tp = OmeZarrWriterV3(
@@ -299,9 +388,8 @@ def test_full_vs_timepoint_equivalence(
         dtype=data.dtype,
         axes_names=axes_names,
         axes_types=axes_types,
-        scale_factors=factors,
-        num_levels=None,
-        chunk_size=chunk_size,
+        scale=scale,
+        chunk_shape=chunk_shape,
         shard_factor=shard_factor,
     )
 
@@ -326,7 +414,7 @@ def test_full_vs_timepoint_equivalence(
         assert arr_full.chunks == chunk_size
         assert arr_tp.chunks == chunk_size
 
-        # 3) Shard layout
+        # 3) Shard layout (v3 only)
         expected_shard = tuple(c * s for c, s in zip(chunk_size, shard_factor))
         assert arr_full.shards == expected_shard
         assert arr_tp.shards == expected_shard
