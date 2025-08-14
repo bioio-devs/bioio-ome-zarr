@@ -1,17 +1,6 @@
-from __future__ import annotations
-
-"""
-Dimension-agnostic utilities for building OME-Zarr pyramids.
-
-All helpers in this module are safe for 2–5D shapes. Backward-compatible
-entry points and behaviors are preserved for existing callers.
-"""
-
-import math
 from dataclasses import dataclass
-from math import prod
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple, Union, cast
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import dask.array as da
 import numcodecs
@@ -23,15 +12,9 @@ from zarr.storage import LocalStore
 
 from bioio_ome_zarr.reader import Reader
 
-# -----------------------------------------------------------------------------
-# Types
-# -----------------------------------------------------------------------------
-
-# ND-friendly tuple type (was fixed 5-tuple before)
 DimTuple = Tuple[int, ...]
 
 
-# (Kept for compatibility; many callers define their own) ----------------------
 @dataclass
 class ZarrLevel:
     shape: DimTuple
@@ -40,68 +23,12 @@ class ZarrLevel:
     zarray: zarr.Array
 
 
-# -----------------------------------------------------------------------------
-# Chunking & resizing
-# -----------------------------------------------------------------------------
-
-
-def suggest_chunks(
-    shape: Tuple[int, ...],
-    dtype: Union[str, np.dtype],
-    axis_types: List[str],
-    target_size: int = 16 << 20,  # ~16 MiB
-) -> Tuple[int, ...]:
-    """
-    Suggest an ND chunk shape aiming for ~``target_size`` bytes per chunk.
-
-    Strategy
-    --------
-    - Start with 1 along non-spatial axes; fill spatial axes from the budget.
-    - For 2–3 spatial dims, distribute the budget across them.
-    - If the full array fits in budget, return the full shape.
-    """
-    itemsize = np.dtype(dtype).itemsize
-    max_elems = max(1, target_size // itemsize)
-
-    if prod(shape) <= max_elems:
-        return tuple(shape)
-
-    spatial_idxs = [i for i, t in enumerate(axis_types) if t == "space"]
-    ndim = len(shape)
-    chunk = [1] * ndim
-
-    if len(spatial_idxs) == 0:
-        return tuple(chunk)  # nothing to distribute
-
-    # Greedy fill on spatial dims: last dims first (often Y/X)
-    remaining = max_elems
-    # approximate square/box base for the first spatial axis we fill
-    base = int(math.sqrt(max_elems)) if len(spatial_idxs) >= 2 else max_elems
-    first = True
-    for idx in reversed(spatial_idxs):
-        size = shape[idx]
-        if first:
-            val = min(size, max(1, base))
-            first = False
-        else:
-            val = min(size, max(1, remaining))
-        chunk[idx] = val
-        remaining = max(1, remaining // max(1, val))
-
-    return tuple(chunk)
-
-
 def resize(
     image: da.Array, output_shape: Tuple[int, ...], *args: Any, **kwargs: Any
 ) -> da.Array:
-    """Block-wise ND resize with Dask + skimage, preserving dtype.
-
-    The function rechunks input to better match the output tiling to avoid
-    tiny output chunks, then maps a per-block resize and rechunks back.
-    """
+    """Block-wise ND resize with Dask + skimage, preserving dtype."""
     factors = np.array(output_shape) / np.array(image.shape, float)
 
-    # Choose an input chunking that maps neatly to output chunks
     better_chunksize = tuple(
         np.maximum(1, np.ceil(np.array(image.chunksize) * factors) / factors).astype(
             int
@@ -109,7 +36,6 @@ def resize(
     )
     image_prepared = image.rechunk(better_chunksize)
 
-    # Anticipate each block's output chunk shape
     block_output_shape = tuple(
         np.ceil(np.array(better_chunksize) * factors).astype(int)
     )
@@ -129,74 +55,7 @@ def resize(
     return output.rechunk(image.chunksize).astype(image.dtype)
 
 
-# -----------------------------------------------------------------------------
-# Multiscale shape planners
-# -----------------------------------------------------------------------------
-
-
-def compute_level_shapes(
-    lvl0shape: Tuple[int, ...],
-    scaling: Union[Tuple[float, ...], List[str]],
-    nlevels: Union[int, Tuple[int, ...]],
-    max_levels: Optional[int] = None,
-) -> List[Tuple[int, ...]]:
-    """
-    Compute ND multiscale pyramid level shapes.
-
-    Two compatible calling styles are supported:
-
-    1) Legacy style
-       compute_level_shapes((T,C,Z,Y,X), (1,1,1,2,2), 3)
-       → applies the numeric scaling to *every* axis.
-
-    2) V3 style (recommended)
-       compute_level_shapes(base_shape, axis_names, axis_factors, max_levels)
-       → only **Y**/**X** are downsampled; all other axes remain unchanged.
-    """
-    # V3 style: scaling=list[str], nlevels=tuple[int,...]
-    if (
-        isinstance(scaling, list)
-        and all(isinstance(n, str) for n in scaling)
-        and isinstance(nlevels, tuple)
-    ):
-        axis_names = [n.lower() for n in scaling]
-        axis_factors = tuple(int(f) for f in nlevels)
-        shapes_v3: List[Tuple[int, ...]] = [tuple(lvl0shape)]
-
-        levels_target = max_levels
-        max_autolevels = 64 if levels_target is None else levels_target
-
-        for _ in range(1, max_autolevels):
-            prev = shapes_v3[-1]
-            nxt: List[int] = []
-            for i, size in enumerate(prev):
-                name = axis_names[i] if i < len(axis_names) else ""
-                fac = axis_factors[i] if i < len(axis_factors) else 1
-                if name in ("y", "x") and fac > 1:
-                    nxt.append(max(1, size // fac))
-                else:
-                    nxt.append(size)
-            nxt_tuple = tuple(nxt)
-            if nxt_tuple == prev:
-                break
-            shapes_v3.append(nxt_tuple)
-            if levels_target is not None and len(shapes_v3) >= levels_target:
-                break
-        return shapes_v3
-
-    # Legacy style: scaling=tuple[float], nlevels=int
-    scaling_factors = cast(Tuple[float, ...], scaling)
-    num_levels = cast(int, nlevels)
-    shapes_legacy: List[Tuple[int, ...]] = [tuple(lvl0shape)]
-    for _ in range(max(1, num_levels) - 1):
-        prev = shapes_legacy[-1]
-        next_shape = tuple(
-            max(int(prev[i] / scaling_factors[i]), 1) for i in range(len(prev))
-        )
-        shapes_legacy.append(next_shape)
-    return shapes_legacy
-
-
+# LEGACY (Remove with V2 writer)
 def get_scale_ratio(
     level0: Tuple[int, ...], level1: Tuple[int, ...]
 ) -> Tuple[float, ...]:
@@ -204,6 +63,7 @@ def get_scale_ratio(
     return tuple(level0[i] / level1[i] for i in range(len(level0)))
 
 
+# This is used as the default for V2 instead of 16mb chunk default
 def compute_level_chunk_sizes_zslice(
     level_shapes: List[Tuple[int, ...]],
 ) -> List[DimTuple]:
@@ -214,8 +74,6 @@ def compute_level_chunk_sizes_zslice(
     - **2–4D**: full chunk along the last two dims (assumed Y/X), 1 elsewhere,
       and reduce Y/X chunk sizes in lock-step with level downsampling.
     """
-    if not level_shapes:
-        return []
 
     ndim = len(level_shapes[0])
     result: List[DimTuple] = []
@@ -262,11 +120,6 @@ def compute_level_chunk_sizes_zslice(
     return result
 
 
-# -----------------------------------------------------------------------------
-# Memory-based chunk sizing
-# -----------------------------------------------------------------------------
-
-
 def chunk_size_from_memory_target(
     shape: Tuple[int, ...],
     dtype: Union[str, np.dtype],
@@ -307,11 +160,6 @@ def chunk_size_from_memory_target(
     return tuple(chunk_list)
 
 
-# -----------------------------------------------------------------------------
-# Append a new level (v2 helper; still TCZYX-specific due to Reader)
-# -----------------------------------------------------------------------------
-
-
 def add_zarr_level(
     existing_zarr: Union[str, Path],
     scale_factors: Tuple[float, float, float, float, float],  # (T, C, Z, Y, X)
@@ -320,10 +168,6 @@ def add_zarr_level(
 ) -> None:
     """
     Append one more resolution level to a v2 OME-Zarr, writing in T-slices.
-
-    NOTE: This helper remains TCZYX-specific because ``Reader`` exposes a
-    TCZYX-oriented API. If you want a generalized ND version, we can refactor
-    ``Reader`` and this function together.
     """
     rdr = Reader(existing_zarr)
     levels = list(rdr.resolution_levels)

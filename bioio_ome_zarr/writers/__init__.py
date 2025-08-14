@@ -9,7 +9,6 @@ from .utils import (
     add_zarr_level,
     chunk_size_from_memory_target,
     compute_level_chunk_sizes_zslice,
-    compute_level_shapes,
     get_scale_ratio,
     resize,
 )
@@ -24,7 +23,6 @@ __all__ = [
     "add_zarr_level",
     "build_ngff_metadata",
     "chunk_size_from_memory_target",
-    "compute_level_shapes",
     "compute_level_chunk_sizes_zslice",
     "resize",
     "get_scale_ratio",
