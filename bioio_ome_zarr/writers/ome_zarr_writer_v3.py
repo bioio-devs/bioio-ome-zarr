@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import dask.array as da
 import numcodecs
 import numpy as np
 import zarr
+from bioio_base.reader import Reader
 from numcodecs import Blosc as BloscV2
 from zarr.codecs import BloscCodec, BloscShuffle
 
@@ -54,20 +55,22 @@ class OMEZarrWriterV3:
         Parameters
         ----------
         store : Union[str, zarr.storage.StoreLike]
-            Filesystem path, URL (via fsspec), or Store-like for the root group.
+            Filesystem path, URL (via fsspec), or Store-like for the root
+            group.
         shape : Tuple[int, ...]
             Level-0 image shape (e.g., (T,C,Z,Y,X)).
         dtype : Union[np.dtype, str]
             NumPy dtype for the on-disk array.
         scale : Optional[Tuple[Tuple[float, ...], ...]]
             Per-level, per-axis *relative size* vs. level-0. For example,
-            ``((1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25))`` writes two extra levels
-            at 1/2 and 1/4 resolution on spatial axes. If ``None``, only level-0
-            is written.
+            ``((1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25))`` writes two extra
+            levels at 1/2 and 1/4 resolution on spatial axes. If ``None``,
+            only level-0 is written.
         chunk_shape : Optional[Tuple[Tuple[int, ...], ...]]
             Chunk shapes per level. If ``None``, a suggested ≈16 MiB chunk is
             derived from level-0 and reused (v3). In v2, if omitted, a legacy
-            per-level policy is applied to ensure chunk directories are created.
+            per-level policy is applied to ensure chunk directories are
+            created.
         shard_factor : Optional[Tuple[int, ...]]
             Optional shard factor per axis (v3 only); ignored for v2.
         compressor : Optional[BloscCodec | numcodecs.abc.Codec]
@@ -107,9 +110,7 @@ class OMEZarrWriterV3:
             types=axes_types,
             units=axes_units,
             scales=physical_pixel_size,
-            factors=tuple(
-                1 for _ in range(self.ndim)
-            ),  # factors not used for shapes here
+            factors=tuple(1 for _ in range(self.ndim)),
         )
 
         # 3) Compute all pyramid level shapes from `scale`
@@ -120,8 +121,8 @@ class OMEZarrWriterV3:
             for level_scale in scale:
                 if len(level_scale) != self.ndim:
                     raise ValueError(
-                        f"Each scale tuple must have length {self.ndim};"
-                        f" got {len(level_scale)}"
+                        f"Each scale tuple must have length {self.ndim}; "
+                        f"got {len(level_scale)}"
                     )
 
             # Normalize to the declared type (List[List[float]])
@@ -142,24 +143,24 @@ class OMEZarrWriterV3:
         if chunk_shape is not None:
             if len(chunk_shape) != self.num_levels:
                 raise ValueError(
-                    f"chunk_shape must have one entry per level ({self.num_levels}); "
-                    f"got {len(chunk_shape)}"
+                    "chunk_shape must have one entry per level "
+                    f"({self.num_levels}); got {len(chunk_shape)}"
                 )
             for idx, ch in enumerate(chunk_shape):
                 if len(ch) != self.ndim:
                     raise ValueError(
                         f"chunk_shape[{idx}] len {len(ch)} != ndim {self.ndim}"
                     )
-            self.chunk_shapes_per_level: List[Tuple[int, ...]] = [
-                tuple(map(int, ch)) for ch in chunk_shape
-            ]
+            self.chunk_shapes_per_level = [tuple(map(int, ch)) for ch in chunk_shape]
         else:
             suggested = chunk_size_from_memory_target(
-                self.level_shapes[0], self.dtype, 16 << 20
+                self.level_shapes[0],
+                self.dtype,
+                16 << 20,
             )
             self.chunk_shapes_per_level = [suggested for _ in range(self.num_levels)]
 
-        # 5) formating and compression
+        # 5) formatting and compression
         self.zarr_format = zarr_format
         self.shard_factor = shard_factor
         self.compressor = compressor
@@ -181,7 +182,10 @@ class OMEZarrWriterV3:
     # Public interface
     # -----------------
 
-    def write_full_volume(self, input_data: Union[np.ndarray, da.Array]) -> None:
+    def write_full_volume(
+        self,
+        input_data: Union[np.ndarray, da.Array],
+    ) -> None:
         """
         Write full-resolution data into all pyramid levels.
 
@@ -208,58 +212,134 @@ class OMEZarrWriterV3:
             else:
                 da.store(src, self.datasets[lvl], lock=True)
 
-    def write_timepoint(
-        self, t_index: int, data_t: Union[np.ndarray, da.Array]
+    def write_timepoints(
+        self,
+        source: Union[Reader, np.ndarray, da.Array],
+        *,
+        channel_indexes: Optional[List[int]] = None,
+        tbatch: int = 1,
     ) -> None:
         """
-        Write a single timepoint slice at index ``t_index`` into all levels.
-
-        Parameters
-        ----------
-        t_index : int
-            Index along the time axis to write.
-        data_t : Union[np.ndarray, dask.array.Array]
-            One timepoint with shape equal to level-0 shape **without** the T axis.
+        Batch write along T. Writer and source axes must match by set (no
+        implicit expansion). Spatial axes are downsampled for lower levels; T
+        and C are preserved.
         """
         if not self._initialized:
             self._initialize()
 
-        try:
-            axis_t = self.axes.index_of("t")
-        except ValueError:
-            raise ValueError("Axes do not include a time axis 't'.")
-
-        # Ensure a Dask array with a singleton T dimension
-        if isinstance(data_t, da.Array):
-            block = da.expand_dims(data_t, axis=axis_t)
-        else:
-            level0_chunks = self.datasets[0].chunks
-            chunks_wo_t = level0_chunks[:axis_t] + level0_chunks[axis_t + 1 :]
-            block = da.expand_dims(
-                da.from_array(data_t, chunks=chunks_wo_t), axis=axis_t
+        writer_axes = [
+            a.lower() for a in self.axes.names
+        ]  # e.g. ["t","c","y","x"] or ["t","c","z","y","x"]
+        if "t" not in writer_axes:
+            raise ValueError(
+                "write_timepoints() requires a time axis 'T' in writer axes."
             )
 
-        # Downsample & store this timepoint per level
-        for lvl in range(self.num_levels):
-            # Build target shape with T=1 at the time axis
-            target_shape = list(self.level_shapes[lvl])
-            target_shape[axis_t] = 1
-            level_block = (
-                block if lvl == 0 else resize(block, tuple(target_shape), order=0)
+        axis_t = writer_axes.index("t")
+        total_T = int(self.level_shapes[0][axis_t])
+        tbatch = max(1, int(tbatch))
+
+        def _region_one(k_abs: int) -> Tuple[slice, ...]:
+            return tuple(
+                slice(k_abs, k_abs + 1) if i == axis_t else slice(None)
+                for i in range(self.ndim)
             )
 
-            if self.zarr_format == 2:
-                # Use region write to materialize only this timepoint
-                sel_region: List[slice] = [slice(None)] * self.ndim
-                sel_region[axis_t] = slice(t_index, t_index + 1)
-                da.to_zarr(level_block, self.datasets[lvl], region=tuple(sel_region))
+        for start_t in range(0, total_T, tbatch):
+            end_t = min(start_t + tbatch, total_T)
+            if end_t <= start_t:
+                continue
+
+            if isinstance(source, Reader):
+                # axis presence comes from string like "TCYX", "TYX", etc.
+                reader_order = source.dims.order.lower()  # e.g. "tcyx"
+                reader_set = set(reader_order)
+                writer_set = set(writer_axes)
+
+                if reader_set != writer_set:
+                    raise ValueError(
+                        "Reader axes "
+                        f"{sorted(reader_set)} do not match writer axes "
+                        f"{sorted(writer_set)}. Configure the writer axes to "
+                        "match the Reader; no implicit expansion is performed."
+                    )
+                if "t" not in reader_set:
+                    raise ValueError("Reader lacks 'T' but writer expects time.")
+
+                # ask the Reader to return data in the WRITER'S axis order
+                request_order = "".join(ax.upper() for ax in writer_axes)
+
+                # only slice axes the reader actually has
+                # NOTE: values may be slices (e.g. T) or index lists (e.g. C)
+                # so keep it broad for mypy.
+                slice_kwargs: Dict[str, Any] = {}
+                if "t" in reader_set:
+                    slice_kwargs["T"] = slice(start_t, end_t)
+                if "c" in reader_set and channel_indexes is not None:
+                    slice_kwargs["C"] = channel_indexes
+
+                block = source.get_image_dask_data(
+                    request_order,
+                    **slice_kwargs,
+                )
+
             else:
-                arr = level_block.compute()[0]
-                sel_set: List[Union[slice, int]] = [
-                    cast(Union[slice, int], slice(None)) for _ in range(self.ndim)
-                ]
-                sel_set[axis_t] = t_index
-                self.datasets[lvl][tuple(sel_set)] = arr
+                # Array path: already in writer order & ndim (including T)
+                if isinstance(source, np.ndarray):
+                    chunks = self.datasets[0].chunks
+                    assert chunks is not None, "Writer datasets must have chunks."
+                    arr = da.from_array(source, chunks=chunks)
+                else:
+                    arr = source  # dask
+
+                if arr.ndim != self.ndim:
+                    raise ValueError(
+                        "Array source ndim "
+                        f"({arr.ndim}) must match writer.ndim ({self.ndim}). "
+                        "No implicit expansion or reordering is performed."
+                    )
+                sel: List[slice] = [slice(None)] * self.ndim
+                sel[axis_t] = slice(start_t, end_t)
+                block = arr[tuple(sel)]
+
+            # Level 0: per‑T region writes
+            for k_abs in range(start_t, end_t):
+                rel = k_abs - start_t
+                sel0: List[slice] = [slice(None)] * self.ndim
+                sel0[axis_t] = slice(rel, rel + 1)
+                subset = block[tuple(sel0)]
+
+                region_one = _region_one(k_abs)
+                if self.zarr_format == 2:
+                    da.to_zarr(subset, self.datasets[0], region=region_one)
+                else:
+                    da.store(
+                        subset,
+                        self.datasets[0],
+                        regions={self.datasets[0]: region_one},
+                    )
+
+            # Lower levels: resize once, then per‑T region writes
+            for lvl in range(1, self.num_levels):
+                nextshape = list(self.level_shapes[lvl])
+                nextshape[axis_t] = end_t - start_t
+                resized = resize(block, tuple(nextshape), order=0).astype(block.dtype)
+
+                for k_abs in range(start_t, end_t):
+                    rel = k_abs - start_t
+                    sel1: List[slice] = [slice(None)] * self.ndim
+                    sel1[axis_t] = slice(rel, rel + 1)
+                    subset = resized[tuple(sel1)]
+
+                    region_one = _region_one(k_abs)
+                    if self.zarr_format == 2:
+                        da.to_zarr(subset, self.datasets[lvl], region=region_one)
+                    else:
+                        da.store(
+                            subset,
+                            self.datasets[lvl],
+                            regions={self.datasets[lvl]: region_one},
+                        )
 
     # -----------------
     # Internal plumbing
@@ -274,10 +354,16 @@ class OMEZarrWriterV3:
 
         if self.compressor is None:
             if self.zarr_format == 2:
-                compressor = BloscV2(cname="zstd", clevel=3, shuffle=BloscV2.BITSHUFFLE)
+                compressor = BloscV2(
+                    cname="zstd",
+                    clevel=3,
+                    shuffle=BloscV2.BITSHUFFLE,
+                )
             else:
                 compressor = BloscCodec(
-                    cname="zstd", clevel=3, shuffle=BloscShuffle.bitshuffle
+                    cname="zstd",
+                    clevel=3,
+                    shuffle=BloscShuffle.bitshuffle,
                 )
         else:
             compressor = self.compressor
@@ -323,7 +409,10 @@ class OMEZarrWriterV3:
                     "chunks": chunks_lvl,
                     "dtype": self.dtype,
                     "compressors": compressor,
-                    "chunk_key_encoding": {"name": "default", "separator": "/"},
+                    "chunk_key_encoding": {
+                        "name": "default",
+                        "separator": "/",
+                    },
                 }
                 if self.shard_factor is not None:
                     kwargs["shards"] = tuple(
@@ -346,13 +435,16 @@ class OMEZarrWriterV3:
                 return zarr.open_group(store=fs, mode="w", zarr_format=self.zarr_format)
             return zarr.open_group(self.store, mode="w", zarr_format=self.zarr_format)
         return zarr.group(
-            store=self.store, overwrite=True, zarr_format=self.zarr_format
+            store=self.store,
+            overwrite=True,
+            zarr_format=self.zarr_format,
         )
 
     def preview_metadata(self) -> Dict[str, Any]:
         """
-        Build and return the exact NGFF metadata dict(s) this writer will persist.
-        Safe to call before initializing the store; uses in-memory config/state.
+        Build and return the exact NGFF metadata dict(s) this writer will
+        persist. Safe to call before initializing the store; uses in-memory
+        config/state.
         """
         params = MetadataParams(
             image_name=self.image_name,
@@ -364,7 +456,10 @@ class OMEZarrWriterV3:
             root_transform=self.root_transform,
             dataset_scales=self.dataset_scales,
         )
-        return build_ngff_metadata(zarr_format=self.zarr_format, params=params)
+        return build_ngff_metadata(
+            zarr_format=self.zarr_format,
+            params=params,
+        )
 
     def _write_metadata(self) -> None:
         """Persist NGFF metadata to the opened root group."""
