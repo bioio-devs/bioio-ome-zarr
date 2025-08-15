@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -197,66 +195,50 @@ def build_ngff_metadata(
 # ----------------------------------------------------------------------
 
 
-def _level_scale_from_dataset_scales(
-    axes: Axes,
-    lvl: int,
-    dataset_scales: Optional[List[List[float]]],
-) -> List[float]:
-    """
-    Compute per-axis scale transform for a given level.
-
-    If `dataset_scales` is None, only level 0 is expected; spatial axes use
-    `axes.scales[i]` (default 1.0), and non-spatial axes use 1.0.
-
-    For levels > 0 (lvl >= 1), spatial scales are derived as:
-        scale[i] = base_scale[i] * (1 / rel_size_i)
-    where a 0.0 relative size is treated as 1.0 to avoid division by zero.
-    """
-    out: List[float] = []
-    for i, ax_type in enumerate(axes.types):
-        base = float(axes.scales[i] if i < len(axes.scales) else 1.0)
-        if ax_type == "space":
-            if lvl == 0 or dataset_scales is None:
-                out.append(base)
-            else:
-                rel_size = float(dataset_scales[lvl - 1][i])
-                if rel_size == 0.0:
-                    rel_size = 1.0
-                out.append(base * (1.0 / rel_size))
-        else:
-            out.append(1.0)
-    return out
-
-
 def _build_ngff_v04(p: MetadataParams) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Build NGFF 0.4 `multiscales` and `omero` dicts (Zarr v2 layout)."""
     axes_list = p.axes.to_metadata()
 
     datasets: List[Dict[str, Any]] = []
     for lvl in range(len(p.level_shapes)):
+        scale_vec: List[float] = []
+        for i, ax_type in enumerate(p.axes.types):
+            if ax_type != "space":
+                scale_vec.append(1.0)
+                continue
+            base = float(p.axes.scales[i] if i < len(p.axes.scales) else 1.0)
+            if lvl == 0 or p.dataset_scales is None:
+                scale_vec.append(base)
+            else:
+                rel_size = float(p.dataset_scales[lvl - 1][i])
+                if rel_size == 0.0:
+                    rel_size = 1.0
+                scale_vec.append(base * (1.0 / rel_size))
+
         datasets.append(
             {
                 "path": str(lvl),
                 "coordinateTransformations": [
                     {
                         "type": "scale",
-                        "scale": _level_scale_from_dataset_scales(
-                            p.axes, lvl, p.dataset_scales
-                        ),
-                    },
-                    {"type": "translation", "translation": [0.0 for _ in p.axes.names]},
+                        "scale": scale_vec,
+                    }
                 ],
             }
         )
 
-    multiscales = [
-        {
-            "axes": axes_list,
-            "datasets": datasets,
-            "name": "/",
-            "version": OME_NGFF_VERSION_V04,
-        }
-    ]
+    multiscale: Dict[str, Any] = {
+        "axes": axes_list,
+        "datasets": datasets,
+        "name": p.image_name,
+        "version": OME_NGFF_VERSION_V04,
+    }
+
+    # Only include root transform if explicitly provided
+    if p.root_transform is not None:
+        multiscale["coordinateTransformations"] = [p.root_transform]
+
+    multiscales = [multiscale]
 
     # OMERO channels: provided or inferred
     if p.channels:
@@ -283,7 +265,7 @@ def _build_ngff_v04(p: MetadataParams) -> Tuple[List[Dict[str, Any]], Dict[str, 
         "name": p.image_name,
         "version": OME_NGFF_VERSION_V04,
         "channels": channel_list,
-        "rdefs": {"defaultT": 0, "defaultZ": size_z // 2, "model": "color"},
+        "rdefs": {"defaultT": 0, "defaultZ": max(0, size_z // 2), "model": "color"},
     }
     return multiscales, omero
 
@@ -294,15 +276,27 @@ def _build_ngff_v05(p: MetadataParams) -> Dict[str, Any]:
 
     datasets: List[Dict[str, Any]] = []
     for lvl in range(len(p.level_shapes)):
+        scale_vec: List[float] = []
+        for i, ax_type in enumerate(p.axes.types):
+            if ax_type != "space":
+                scale_vec.append(1.0)
+                continue
+            base = float(p.axes.scales[i] if i < len(p.axes.scales) else 1.0)
+            if lvl == 0 or p.dataset_scales is None:
+                scale_vec.append(base)
+            else:
+                rel_size = float(p.dataset_scales[lvl - 1][i])
+                if rel_size == 0.0:
+                    rel_size = 1.0
+                scale_vec.append(base * (1.0 / rel_size))
+
         datasets.append(
             {
                 "path": str(lvl),
                 "coordinateTransformations": [
                     {
                         "type": "scale",
-                        "scale": _level_scale_from_dataset_scales(
-                            p.axes, lvl, p.dataset_scales
-                        ),
+                        "scale": scale_vec,
                     }
                 ],
             }
@@ -313,6 +307,8 @@ def _build_ngff_v05(p: MetadataParams) -> Dict[str, Any]:
         "axes": axes_list,
         "datasets": datasets,
     }
+
+    # Only include root transform if explicitly provided
     if p.root_transform is not None:
         multiscale["coordinateTransformations"] = [p.root_transform]
 
