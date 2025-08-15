@@ -130,6 +130,8 @@ def test_write_ome_zarr(
     assert Reader.is_supported_image(save_uri)
     reader = Reader(str(save_uri))
     assert reader is not None
+    assert len(reader.shape) >= len(expected_shapes[0])
+    assert reader.shape == expected_shapes[0]
 
 
 @array_constructor
@@ -220,3 +222,5 @@ def test_write_ome_zarr_iterative(
     assert Reader.is_supported_image(save_uri)
     reader = Reader(str(save_uri))
     assert reader is not None
+    assert len(reader.shape) >= len(expected_shapes[0])
+    assert reader.shape == expected_shapes[0]
