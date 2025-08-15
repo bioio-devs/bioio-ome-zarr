@@ -49,229 +49,253 @@ path = "https://allencell.s3.amazonaws.com/aics/nuc-morph-dataset/hipsc_fov_nucl
 image = BioImage(path)
 print(image.get_image_dask_data())
 ```
-## OME Zarr V2 Writer
 
-Import the writer and utilities:
+## Writing OME-Zarr Stores
 
+The `OMEZarrWriter` can write **both** Zarr v2 (NGFF 0.4) and Zarr v3 (NGFF 0.5) formats.
+
+### basic writer example (2D YX)
 ```python
-from bioio_ome_zarr.writers import (
-    OmeZarrWriterV2,
-    chunk_size_from_memory_target,
-    compute_level_shapes,
-    compute_level_chunk_sizes_zslice,
-    resize,
-)
-
-```
-
-Use utility functions directly:
-
-```python
-# Compute chunk size within a memory target
-shape = (1, 1, 1, 128, 128)  # TCZYX
-dtype = np.uint16
-mem_target = 1024
-chunk = chunk_size_from_memory_target(shape, dtype, mem_target)
-# chunk == (1, 1, 1, 16, 16)
-```
-
-```python
-# Compute multiscale shapes
-base_shape = (1, 1, 1, 128, 128)
-scaling = (1.0, 1.0, 1.0, 2.0, 2.0)
-levels = 2
-shapes = compute_level_shapes(base_shape, scaling, levels)
-# shapes == [(1,1,1,128,128), (1,1,1,64,64)]
-```
-
-```python
-# Compute chunk sizes per level (Z-slice strategy)
-shapes = [
-    (512, 4, 100, 1000, 1000),
-    (512, 4, 100,  500,  500),
-    (512, 4, 100,  250,  250),
-]
-chunks = compute_level_chunk_sizes_zslice(shapes)
-# chunks == [(1,1,1,1000,1000), (1,1,4,500,500), (1,1,16,250,250)]
-```
-
-### Writing OME-Zarr Stores
-
-```python
-# Prepare data and pyramid parameters
-shape = (4, 2, 2, 64, 32)       # (T,C,Z,Y,X)
-# Create a dask array from random uint8 data
+from bioio_ome_zarr.writers import OMEZarrWriter
 import numpy as np
-im_np = np.random.randint(0, 256, size=shape, dtype=np.uint8)
-im = da.from_array(im_np, chunks=shape)
-scaling = (1.0, 1.0, 1.0, 2.0, 2.0)
-levels = 3
 
-shapes = compute_level_shapes(shape, scaling, levels)
-chunks = compute_level_chunk_sizes_zslice(shapes)
+# Minimal 2D example (Y, X)
+data = np.random.randint(0, 255, size=(64, 64), dtype=np.uint8)
 
-# Initialize writer
-writer = OMEZarrWriter()
-writer.init_store(
-    output_path="output.e.zarr",
-    shapes=shapes,
-    chunk_sizes=chunks,
-    dtype=im.dtype,
+writer = OMEZarrWriter(
+    store="basic.zarr",
+    shape=data.shape,   # (Y, X)
+    dtype=data.dtype,
 )
 
-# Write all timepoints at once
-writer.write_t_batches_array(im, channels=[], tbatch=4)
-
-# Generate and write metadata
-physical_dims = {"c":1.0, "t":1.0, "z":1.0, "y":1.0, "x":1.0}
-physical_units = {"x":"micrometer","y":"micrometer","z":"micrometer","t":"minute"}
-channel_names = [f"c{i}" for i in range(shape[1])]
-channel_colors = [0xFFFFFF for _ in range(shape[1])]
-meta = writer.generate_metadata(
-    image_name="TEST",
-    channel_names=channel_names,
-    physical_dims=physical_dims,
-    physical_units=physical_units,
-    channel_colors=channel_colors,
-)
-writer.write_metadata(meta)
+# Write the data to the store
+writer.write_full_volume(data)
 ```
 
-#### Iterative Timepoint Writing
+### Full writer parameters and API
 
-```python
-# Write one timepoint at a time
-writer = OMEZarrWriter()
-writer.init_store("output_iter.e.zarr", shapes, chunks, im.dtype)
-for t in range(shape[0]):
-    frame = im[t:t+1]  # shape (1,C,Z,Y,X)
-    writer.write_t_batches_array(frame, channels=[], tbatch=1, toffset=t)
-# Then generate and write metadata as above
-```
-## OME Zarr V3 Writer
+Below is a reference of the `OMEZarrWriter` parameters, For complete details, see the constructor signature.
 
-Import the writer and channel class:
+| Parameter                 | Type                                            | Description                                                                                                                                                              |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **store**                 | `str` or `zarr.storage.StoreLike`               | Filesystem path, URL (via `fsspec`), or Store-like object for the root group.                                                                                            |
+| **shape**                 | `tuple[int, ...]`                               | Shape of the highest‑resolution (level‑0) image, e.g., `(1, 1, 4, 64, 64)`.                                                                                                |
+| **dtype**                 | `np.dtype` or `str`                             | NumPy dtype for the on‑disk array (e.g., `uint8`, `uint16`).                                                                                                             |
+| **scale**                 | `tuple[tuple[float, ...], ...]` or `None`       | Per‑level, per‑axis *relative sizes* vs. level‑0. Example: `((1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25))` creates two lower‑res levels. If `None`, only level‑0 is written. |
+| **chunk\_shape**          | `tuple[tuple[int, ...], ...]` or `None`         | Chunk shape per level. Example: ((1, 1, 1, 64, 64), (1, 1, 1, 32, 32))If `None`, a suggested ≈16 MiB chunk is derived for v3; v2 applies a legacy per‑level policy.                                                     |
+| **shard\_factor**         | `tuple[int, ...]` or `None`                     | v3‑only: multiply chunks to form shard sizes. Ignored in v2.                                                                                                             |
+| **compressor**            | `BloscCodec` or `numcodecs.abc.Codec` or `None` | Compression codec. v2: `numcodecs.Blosc`; v3: `zarr.codecs.BloscCodec`.                                                                                                  |
+| **zarr\_format**          | `Literal[2, 3]`                                 | Target Zarr format — `2` (NGFF 0.4) or `3` (NGFF 0.5).    Default `3`                                                                                                               |
+| **image\_name**           | `str` or `None`                                 | Name used in multiscales metadata. Default: `"Image"`.                                                                                                                   |
+| **channels**              | `list[Channel]` or `None`                       | OMERO‑style channel metadata.                                                                                                             |
+| **rdefs**                 | `dict` or `None`                                | OMERO rdef defaults                                                                                                            |
+| **creator\_info**         | `dict` or `None`                                | Optional creator block stored in metadata (v0.5).                                                                                                                        |
+| **root\_transform**       | `dict[str, Any]` or `None`                      | Optional multiscale root coordinate transform.                                                                                                                           |
+| **axes\_names**           | `list[str]` or `None`                           | Names of each axis. Defaults to the last N of `["t", "c", "z", "y", "x"]`.                                                                                               |
+| **axes\_types**           | `list[str]` or `None`                           | Axis types. Defaults: `["time", "channel", "space", …]`.                                                                                                                 |
+| **axes\_units**           | `list[str or None]` or `None`                   | Physical units for each axis (e.g., `"micrometer"`).                                                                                                                     |
+| **physical\_pixel\_size** | `list[float]` or `None`                         | Physical scale at level‑0 for each axis.                                                                                                                                 |
+
+
+**Methods**
+- `write_full_volume(input_data: np.ndarray | dask.array.Array) -> None`  
+  Write level‑0 (and all pyramid levels) from a full array. If a NumPy array is passed, it’s wrapped as Dask using level‑0 chunking.
+
+- `write_timepoints(source: Reader | np.ndarray | dask.array.Array, *, channel_indexes: list[int] | None = None, tbatch: int = 1) -> None`  
+  Stream writes along the **T** axis in batches. Writer and source axes must match by set (order handled internally). Spatial axes are downsampled for lower levels; **T** and **C** are preserved.
+
+- `preview_metadata() -> dict[str, Any]`  
+  Returns the exact NGFF metadata dict(s) that will be persisted, without writing.
+
+---
+
+### Creating a writer (v3 with one extra resolution level)
 
 ```python
 from bioio_ome_zarr.writers import OMEZarrWriter, Channel
 import numpy as np
-```
 
----
-
-### Utilities
-
-You can access helper functions in `bioio_ome_zarr.writers`:
-
-```python
-from bioio_ome_zarr.writers import (
-    compute_level_shapes,
-    chunk_size_from_memory_target,
-    resize,
-)
-```
-
-#### Compute pyramid level shapes
-
-```python
-# Given a base shape and downsampling factors, compute level shapes
-shape = (1, 1, 1, 128, 128)
-axes = ["t", "c", "z", "y", "x"]
-factors = (1, 1, 1, 2, 2)
-levels = 2
-
-shapes = compute_level_shapes(shape, axes, factors, levels)
-# shapes == [(1,1,1,128,128), (1,1,1,64,64)]
-```
-
-#### Suggest default chunk sizes
-
-```python
-# For a given shape, dtype, and memory target (in bytes)
-dtype = np.uint8
-memory_target = 1024
-shape = (1,1,1,128,128)
-
-chunks = chunk_size_from_memory_target(shape, dtype, memory_target)
-# chunks == (1, 1, 1, 32, 32)
-```
-
-### Writing a full volume
-
-```python
-# Create some 5D data (T,C,Z,Y,X)
-shape = (2, 3, 4, 8, 8)
+shape = (2, 3, 4, 8, 8)  # (T, C, Z, Y, X)
 data = np.random.randint(0, 255, size=shape, dtype=np.uint8)
 
-# Optional: build channel metadata
 channels = [Channel(label=f"c{i}", color="FF0000") for i in range(shape[1])]
 
 writer = OMEZarrWriter(
-    store="output_full_volume.zarr",
+    store="output.zarr",
     shape=shape,
     dtype=data.dtype,
-    axes_names=["t","c","z","y","x"],
-    axes_types=["time","channel","space","space","space"],
-    axes_units=[None,None,None,"um","um"],
-    axes_scale=[1.0,1.0,1.0,0.5,0.5],
-    scale_factors=(1,1,2,2,2),
-    num_levels=3,
-    chunk_size=(1,1,1,4,4),
-    shard_factor=(1,1,2,2,2),
+    zarr_format=3,  # 2 for Zarr v2
+    scale=((1, 1, 0.5, 0.5, 0.5),),  # add level at half Z/Y/X
     channels=channels,
-    creator_info={"name":"test","version":"0.1"},
+    axes_names=["t", "c", "z", "y", "x"],
+    axes_types=["time", "channel", "space", "space", "space"],
+    axes_units=[None, None, "micrometer", "micrometer", "micrometer"],
 )
 
-# This will require the full volume in memory
+# Write the entire volume
 writer.write_full_volume(data)
 ```
 
----
-
-### Writing single timepoints
+### Writing a full volume (NumPy or Dask)
 
 ```python
-# Data shape (T,C,Z,Y,X)
-shape = (3, 2, 2, 4, 4)
-data = np.random.randint(0,255,size=shape,dtype=np.uint8)
+# NumPy array is accepted and will be wrapped into Dask automatically
+writer.write_full_volume(data)
 
-writer = OMEZarrWriter(
-    store="out_time.zarr",
-    shape=shape,
-    dtype=data.dtype,
-    scale_factors=(1,1,2,2,2)
-)
-
-for t in range(shape[0]):
-    # extract single timepoint (C,Z,Y,X)
-    slice_t = data[t]
-    writer.write_timepoint(t, slice_t)
+# Or with a Dask array if you already have one
+import dask.array as da
+writer.write_full_volume(da.from_array(data, chunks=(1, 1, 1, 8, 8)))
 ```
 
----
-
-### Top‑level scale transform
-
-To include a coordinate transform at the multiscale root, pass `multiscale_scale`:
+### Writing timepoints in batches (streaming along T)
 
 ```python
-scale0 = [0.1,0.1,0.1,0.1,0.1]
+# Suppose your writer axes include "t"; write in batches to limit memory
+from bioio_ome_zarr import Reader
+
+rdr = Reader("/path/to/large_source.ome.zarr")
+# Axes in writer and reader must match by set; order is handled by the writer
+writer.write_timepoints(rdr, tbatch=4, channel_indexes=[0, 2])
+```
+
+### Custom chunking per level
+
+```python
+# Provide one chunk shape per level; must match ndim
+chunk_shape = (
+    (1, 1, 1, 64, 64),  # level 0
+    (1, 1, 1, 32, 32),  # level 1
+)
+writer = OMEZarrWriter(
+    store="custom_chunks.zarr",
+    shape=(1, 1, 2, 256, 256),
+    dtype="uint16",
+    zarr_format=3,
+    scale=((1, 1, 0.5, 0.5, 0.5),),
+    chunk_shape=chunk_shape,
+)
+
+# Example data matching the declared shape
+arr = np.random.randint(0, 65535, size=(1, 1, 2, 256, 256), dtype=np.uint16)
+writer.write_full_volume(arr)
+```
+
+### Sharded writes (v3 only)
+
+```python
+from zarr.codecs import BloscCodec, BloscShuffle
 
 writer = OMEZarrWriter(
-    store="out_with_scale.zarr",
-    shape=(1,1,1,4,4),
+    store="sharded_v3.zarr",
+    shape=(1, 1, 16, 1024, 1024),
     dtype="uint8",
-    axes_names=["t","c","z","y","x"],
-    axes_types=["time","channel","space","space","space"],
-    axes_units=[None,None,None,"µm","µm"],
-    axes_scale=scale0,
-    scale_factors=(1,1,1,2,2),
-    num_levels=None,
-    root_transform= {"type":"scale","scale":scale0},
+    zarr_format=3,
+    scale=((1, 1, 0.5, 0.5, 0.5),),
+    shard_factor=(1, 1, 2, 2, 2),  # multiply chunks to form shard sizes
+    compressor=BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.bitshuffle),
 )
-# then write data as above
+
+writer.write_full_volume(
+    np.random.randint(0, 255, size=(1, 1, 16, 1024, 1024), dtype=np.uint8)
+)
 ```
 
+### Targeting Zarr v2 explicitly (NGFF 0.4)
+
+```python
+import numcodecs
+
+writer = OMEZarrWriter(
+    store="target_v2.zarr",
+    shape=(2, 1, 4, 256, 256),
+    dtype="uint8",
+    zarr_format=2,  # write NGFF 0.4
+    scale=((1, 1, 0.5, 0.5, 0.5), (1, 1, 0.25, 0.25, 0.25)),
+    compressor=numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE),
+)
+
+writer.write_full_volume(
+    np.random.randint(0, 255, size=(2, 1, 4, 256, 256), dtype=np.uint8)
+)
+```
+
+### Writing to S3 (or any fsspec URL)
+
+```python
+# Requires creds for private buckets; public can be anonymous
+writer = OMEZarrWriter(
+    store="s3://my-bucket/path/to/out.zarr",
+    shape=(1, 2, 8, 2048, 2048),
+    dtype="uint16",
+    zarr_format=3,
+)
+
+writer.write_full_volume(
+    np.random.randint(0, 65535, size=(1, 2, 8, 2048, 2048), dtype=np.uint16)
+)
+```
+
+### Add a root transform and preview metadata
+
+```python
+writer = OMEZarrWriter(
+    store="with_transform.zarr",
+    shape=(1, 1, 1, 128, 128),
+    dtype="uint8",
+    zarr_format=3,
+    root_transform={"type": "scale", "scale": [1.0, 1.0, 1.0, 0.1, 0.1]},
+)
+# preview metadata (no disk write)
+md = writer.preview_metadata()
+print(md)
+
+# Write file 
+writer.write_full_volume(
+    np.random.randint(0, 255, size=(1, 1, 1, 128, 128), dtype=np.uint8)
+)
+
+
+```
+### Writer Utility Functions
+
+**`chunk_size_from_memory_target(shape, dtype, memory_target, order=None) -> tuple[int, ...]`**
+Suggests a chunk shape that fits within the specified memory target (in bytes).
+
+* Spatial axes (`Z`, `Y`, `X`) start at full size; non-spatial axes start at `1`.
+* All dimensions are halved until the total size (in bytes) fits within `memory_target`.
+* Example:
+
+```python
+from bioio_ome_zarr.writers import chunk_size_from_memory_target
+chunk_size_from_memory_target((1, 1, 16, 1024, 1024), "uint16", 16 * 1024 * 1024) # 16 mbs
+# Returns: (1, 1, 4, 512, 512)
+```
+
+**`add_zarr_level(existing_zarr, scale_factors, compressor=None, t_batch=4) -> None`**
+Appends a new resolution level to an existing **v2 OME-Zarr** store, writing in time (`T`) batches.
+
+* `scale_factors`: per-axis scale relative to the previous highest level (tuple of length 5 for `T, C, Z, Y, X`).
+* Automatically determines appropriate chunk size using `chunk_size_from_memory_target`.
+* Updates the `multiscales` metadata block with the new level's path and transformations.
+* Example:
+
+```python
+from bioio_ome_zarr.writers import add_zarr_level
+add_zarr_level(
+    "my_existing.zarr",
+    scale_factors=(1, 1, 0.5, 0.5, 0.5),
+    compressor=numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+)
+```
+
+## 🚨 Deprecation Notice
+
+The legacy **OmeZarrWriterV2** class (referred to here as “V2 Writer”) is **deprecated** and will be removed in a future release.
+It has been replaced by the new **OMEZarrWriter**, which supports writing to **both Zarr v2 (NGFF 0.4)** and **Zarr v3 (NGFF 0.5)** formats.
+
+For new code, please **use OMEZarrWriter**.
+
+---
 
 
 ## Issues
@@ -281,3 +305,4 @@ writer = OMEZarrWriter(
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for information related to developing the code.
+
