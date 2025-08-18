@@ -38,7 +38,7 @@ def resize(
         np.ceil(np.array(better_chunksize) * factors).astype(int)
     )
 
-    def resize_block(image_block: np.ndarray, block_info: dict) -> np.ndarray:
+    def resize_block(image_block: da.Array, block_info: dict) -> da.Array:
         chunk_output_shape = tuple(
             np.ceil(np.array(image_block.shape) * factors).astype(int)
         )
@@ -130,9 +130,9 @@ def chunk_size_from_memory_target(
 ) -> Tuple[int, ...]:
     """
     Suggest a chunk shape that fits within `memory_target` bytes.
-        - If `order` is None, assume the last N of ["T","C","Z","Y","X"].
-        - Spatial axes (Z/Y/X) start at full size; others start at 1.
-        - Halve all dims until under the target.
+    - If `order` is None, assume the last N of ["T","C","Z","Y","X"].
+    - Spatial axes (Z/Y/X) start at full size; others start at 1.
+    - Halve all dims until under the target.
     """
     TCZYX = ["T", "C", "Z", "Y", "X"]
     ndim = len(shape)
