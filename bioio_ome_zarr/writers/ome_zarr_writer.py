@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
 import numcodecs
@@ -16,6 +14,10 @@ from .utils import (
     compute_level_chunk_sizes_zslice,
     resize,
 )
+
+ChunkSingle = Tuple[int, ...]
+ChunkPerLevel = Tuple[ChunkSingle, ...]
+ChunkShape = Union[ChunkSingle, ChunkPerLevel]
 
 
 class OMEZarrWriter:
@@ -33,7 +35,7 @@ class OMEZarrWriter:
         dtype: Union[np.dtype, str],
         *,
         scale: Optional[Tuple[Tuple[float, ...], ...]] = None,
-        chunk_shape: Optional[Tuple[Tuple[int, ...], ...]] = None,
+        chunk_shape: Optional[ChunkShape] = None,
         shard_factor: Optional[Tuple[int, ...]] = None,
         compressor: Optional[Union[BloscCodec, numcodecs.abc.Codec]] = None,
         zarr_format: Literal[2, 3] = 3,
@@ -66,11 +68,13 @@ class OMEZarrWriter:
             ``((1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25))`` writes two extra
             levels at 1/2 and 1/4 resolution on spatial axes. If ``None``,
             only level-0 is written.
-        chunk_shape : Optional[Tuple[Tuple[int, ...], ...]]
-            Chunk shapes per level. If ``None``, a suggested ≈16 MiB chunk is
-            derived from level-0 and reused (v3). In v2, if omitted, a legacy
-            per-level policy is applied to ensure chunk directories are
-            created.
+        chunk_shape : Optional[Union[Tuple[int, ...], Tuple[Tuple[int, ...], ...]]]
+            Either a single chunk shape (applied to all levels),
+            e.g. ``(1,1,16,256,256)``, or per-level chunk shapes,
+            e.g. ``((1,1,16,256,256), (1,1,16,128,128), ...)``. If ``None``,
+            a suggested ≈16 MiB chunk is derived from level-0 and reused;
+            for Zarr v2, if omitted, a legacy per-level policy may be applied
+            when axes are TCZYX.
         shard_factor : Optional[Tuple[int, ...]]
             Optional shard factor per axis (v3 only); ignored for v2.
         compressor : Optional[BloscCodec | numcodecs.abc.Codec]
@@ -139,24 +143,36 @@ class OMEZarrWriter:
         self.num_levels = len(self.level_shapes)
 
         # 4) Determine per-level chunk shapes
-        self._chunk_shape_explicit: bool = chunk_shape is not None
+        self._chunk_shape_explicit = chunk_shape is not None
         if chunk_shape is not None:
-            if len(chunk_shape) != self.num_levels:
-                raise ValueError(
-                    "chunk_shape must have one entry per level "
-                    f"({self.num_levels}); got {len(chunk_shape)}"
-                )
-            for idx, ch in enumerate(chunk_shape):
-                if len(ch) != self.ndim:
+            # Detect single-tuple vs tuple-of-tuples
+            if len(chunk_shape) > 0 and isinstance(chunk_shape[0], int):
+                single = cast(ChunkSingle, chunk_shape)
+                if len(single) != self.ndim:
                     raise ValueError(
-                        f"chunk_shape[{idx}] len {len(ch)} != ndim {self.ndim}"
+                        f"chunk_shape length {len(single)} != ndim {self.ndim}"
                     )
-            self.chunk_shapes_per_level = [tuple(map(int, ch)) for ch in chunk_shape]
+                self.chunk_shapes_per_level = [
+                    tuple(int(x) for x in single) for _ in range(self.num_levels)
+                ]
+            else:
+                per_level = cast(ChunkPerLevel, chunk_shape)
+                if len(per_level) != self.num_levels:
+                    raise ValueError(
+                        f"chunk_shape must match levels: ({self.num_levels}); "
+                        f"got {len(per_level)}"
+                    )
+                shapes: List[Tuple[int, ...]] = []
+                for idx, ch in enumerate(per_level):
+                    if len(ch) != self.ndim:
+                        raise ValueError(
+                            f"chunk_shape[{idx}] length {len(ch)} != ndim {self.ndim}"
+                        )
+                    shapes.append(tuple(int(x) for x in ch))
+                self.chunk_shapes_per_level = shapes
         else:
             suggested = chunk_size_from_memory_target(
-                self.level_shapes[0],
-                self.dtype,
-                16 << 20,
+                self.level_shapes[0], self.dtype, 16 << 20
             )
             self.chunk_shapes_per_level = [suggested for _ in range(self.num_levels)]
 
