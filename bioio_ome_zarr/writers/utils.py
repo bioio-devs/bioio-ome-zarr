@@ -26,9 +26,7 @@ class ZarrLevel:
 def resize(
     image: da.Array, output_shape: Tuple[int, ...], *args: Any, **kwargs: Any
 ) -> da.Array:
-    """Block-wise ND resize with Dask + skimage, preserving dtype."""
     factors = np.array(output_shape) / np.array(image.shape, float)
-
     better_chunksize = tuple(
         np.maximum(1, np.ceil(np.array(image.chunksize) * factors) / factors).astype(
             int
@@ -59,7 +57,6 @@ def resize(
 def get_scale_ratio(
     level0: Tuple[int, ...], level1: Tuple[int, ...]
 ) -> Tuple[float, ...]:
-    """Per-axis scale ratio from level0 to level1 as floats."""
     return tuple(level0[i] / level1[i] for i in range(len(level0)))
 
 
@@ -68,11 +65,16 @@ def compute_level_chunk_sizes_zslice(
     level_shapes: List[Tuple[int, ...]],
 ) -> List[DimTuple]:
     """
-    Compute ND per-level chunk sizes using a “Z-slice” style policy.
-
-    - **5D (T,C,Z,Y,X)**: reproduce legacy behavior exactly.
-    - **2–4D**: full chunk along the last two dims (assumed Y/X), 1 elsewhere,
-      and reduce Y/X chunk sizes in lock-step with level downsampling.
+    Compute Z-slice–based chunk sizes for a multiscale pyramid.
+    Parameters
+    ----------
+    level_shapes : List[Tuple[int, ...]]
+        Series of level shapes (potentially N-dimensional),
+        but expecting at least 5 dimensions for TCZYX indexing.
+    Returns
+    -------
+    List[DimTuple]
+        Chunk sizes as 5-tuples (T, C, Z, Y, X).
     """
 
     ndim = len(level_shapes[0])
@@ -127,36 +129,34 @@ def chunk_size_from_memory_target(
     order: Optional[Sequence[str]] = None,
 ) -> Tuple[int, ...]:
     """
-    Suggest an ND chunk shape that fits within ``memory_target`` bytes.
-
-    Policy
-    ------
-    - If ``order`` is None, we assume the last N of ["T","C","Z","Y","X"].
-    - Spatial axes (Z/Y/X) start at full size; others start at 1.
-    - Halve all dims until the product fits in the memory target.
+    Suggest a chunk shape that fits within `memory_target` bytes.
+        - If `order` is None, assume the last N of ["T","C","Z","Y","X"].
+        - Spatial axes (Z/Y/X) start at full size; others start at 1.
+        - Halve all dims until under the target.
     """
     TCZYX = ["T", "C", "Z", "Y", "X"]
     ndim = len(shape)
 
-    # Infer/validate order
+    # Infer or validate axis ordering
     if order is None:
         if ndim <= len(TCZYX):
             order = TCZYX[-ndim:]
         else:
-            raise ValueError(f"No default for {ndim}-D shape; pass explicit `order`.")
+            raise ValueError(f"No default for {ndim}-D shape; pass explicit `order`")
     elif len(order) != ndim:
         raise ValueError(f"`order` length {len(order)} != shape length {ndim}")
-
+    # Compute item size in bytes
     itemsize = np.dtype(dtype).itemsize
 
-    # Start with full spatial, 1 elsewhere
+    # Build a mutable list of initial chunk sizes
     chunk_list: List[int] = [
         size if ax.upper() in ("Z", "Y", "X") else 1 for size, ax in zip(shape, order)
     ]
 
+    # Halve dims until within memory target
     while int(np.prod(chunk_list)) * itemsize > memory_target:
         chunk_list = [max(s // 2, 1) for s in chunk_list]
-
+    # Return as an immutable tuple
     return tuple(chunk_list)
 
 
@@ -167,7 +167,7 @@ def add_zarr_level(
     t_batch: int = 4,
 ) -> None:
     """
-    Append one more resolution level to a v2 OME-Zarr, writing in T-slices.
+    Append one more resolution level to an OME-Zarr, writing in T-slices.
     """
     rdr = Reader(existing_zarr)
     levels = list(rdr.resolution_levels)
