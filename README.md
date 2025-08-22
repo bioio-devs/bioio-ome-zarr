@@ -150,13 +150,32 @@ writer.write_full_volume(da.from_array(data, chunks=(1, 1, 1, 8, 8)))
 ### Writing timepoints in batches (streaming along T)
 
 ```python
-# Suppose your writer axes include "t"; write in batches to limit memory
+# Suppose your writer axes include "T"; write timepoints in flexible batches
 from bioio import BioImage
+import dask.array as da
 
 bioimg = BioImage("/path/to/any/bioimage")
 data = bioimg.get_image_dask_data()
 
-writer.write_timepoints(data, tbatch=4, channel_indexes=[0, 2])
+# Write the entire timeseries at once
+writer.write_timepoints(data)
+
+# Write in 5-timepoint batches
+for t in range(0, data.shape[0], 5):
+    writer.write_timepoints(
+    data,
+    start_T_src=t,
+    start_T_dest=t,
+    total_T=5,
+    )
+
+# Write source timepoints [10:20] into destination positions [50:60]
+writer.write_timepoints(
+    data,
+    start_T_src=10,
+    start_T_dest=50,
+    total_T=10,
+)
 ```
 
 ### Custom chunking per level

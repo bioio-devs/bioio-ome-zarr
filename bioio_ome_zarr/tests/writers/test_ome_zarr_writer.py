@@ -291,7 +291,7 @@ def test_write_timepoints_array(
 
     # Act & Assert
     def run() -> None:
-        writer.write_timepoints(arr, tbatch=2)
+        writer.write_timepoints(arr)
 
     if expect_error:
         with pytest.raises(expect_error):
@@ -580,7 +580,7 @@ def test_full_vs_timepoints_equivalence(
     # Act
     w_full.write_full_volume(data)
     dask_data = da.from_array(data, chunks=chunk_size)
-    w_tp.write_timepoints(dask_data, tbatch=1)
+    w_tp.write_timepoints(dask_data)
 
     # Assert
     grp_full = zarr.open(full_store, mode="r")

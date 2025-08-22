@@ -249,82 +249,92 @@ class OMEZarrWriter:
 
     def write_timepoints(
         self,
-        source: Union[np.ndarray, da.Array],
+        data: Union[np.ndarray, da.Array],
         *,
-        tbatch: int = 1,
+        start_T_src: int = 0,
+        start_T_dest: int = 0,
+        total_T: Optional[int] = None,
     ) -> None:
         """
-        Batch write along T. Source must already match the writer’s axis
-        order and dimensionality. Spatial axes are downsampled for lower
-        levels; T and C are preserved.
+        Write a contiguous batch of timepoints from `data` into all pyramid levels.
+
+        Parameters
+        ----------
+        data : np.ndarray | dask.array.Array
+            Array in writer axis order containing the source timepoints.
+            If a NumPy array is provided, it is minimally wrapped as a Dask
+            array with ``chunks="auto"``. For optimal performance and IO
+            alignment, pass a Dask array with explicit chunks.
+        start_T_src : int, optional
+            Source T index at which to begin reading from `data`. Default: 0.
+        start_T_dest : int, optional
+            Destination T index at which to begin writing into the store. Default: 0.
+        total_T : int, optional
+            Number of timepoints to transfer. If None, inferred as the maximum
+            that fits within both the source (from ``start_T_src``) and destination
+            (from ``start_T_dest``).
         """
         if not self._initialized:
             self._initialize()
 
+        # Ensure valid dims
         writer_axes = [a.lower() for a in self.axes.names]
         if "t" not in writer_axes:
-            raise ValueError(
-                "write_timepoints() requires a time axis 'T' in writer axes."
-            )
-
+            raise ValueError("write_t_batch() requires a 'T' axis.")
         axis_t = writer_axes.index("t")
-        total_T = int(self.level_shapes[0][axis_t])
-        tbatch = max(1, int(tbatch))
-
-        # Wrap numpy in dask if needed
-        if isinstance(source, np.ndarray):
-            chunks = self.datasets[0].chunks
-            assert chunks is not None, "Writer datasets must have chunks."
-            arr = da.from_array(source, chunks=chunks)
-        else:
-            arr = source  # already dask
-
+        arr = (
+            da.from_array(data, chunks="auto") if isinstance(data, np.ndarray) else data
+        )
         if arr.ndim != self.ndim:
             raise ValueError(
-                f"Array source ndim ({arr.ndim}) must match writer.ndim ({self.ndim})."
+                f"Array ndim ({arr.ndim}) must match writer.ndim ({self.ndim})."
             )
 
-        for start_t in range(0, total_T, tbatch):
-            end_t = min(start_t + tbatch, total_T)
-            if end_t <= start_t:
-                continue
+        src_T = int(arr.shape[axis_t])
+        dst_T = int(self.level_shapes[0][axis_t])
+        if start_T_src >= src_T or start_T_dest >= dst_T:
+            return
 
-            # Slice this time batch once from the input
-            sel_batch: List[slice] = [slice(None)] * self.ndim
-            sel_batch[axis_t] = slice(start_t, end_t)
-            block = arr[tuple(sel_batch)]
+        src_avail = src_T - start_T_src
+        dst_avail = dst_T - start_T_dest
 
-            # Process each level independently to avoid accumulating resized arrays
-            for lvl in range(self.num_levels):
-                if lvl == 0:
-                    level_block = block
-                else:
-                    nextshape = list(self.level_shapes[lvl])
-                    nextshape[axis_t] = end_t - start_t
-                    level_block = resize(block, tuple(nextshape), order=0).astype(
-                        block.dtype
-                    )
+        # Infer or bound total_T
+        if total_T is None:
+            total_T = min(src_avail, dst_avail)
+        else:
+            total_T = max(0, min(int(total_T), src_avail, dst_avail))
+        if total_T == 0:
+            return
 
-                for k_abs in range(start_t, end_t):
-                    rel = k_abs - start_t
-                    sel_one: List[slice] = [slice(None)] * self.ndim
-                    sel_one[axis_t] = slice(rel, rel + 1)
-                    subset = level_block[tuple(sel_one)]
+        # Source slice
+        sel_src: List[slice] = [slice(None)] * self.ndim
+        sel_src[axis_t] = slice(start_T_src, start_T_src + total_T)
+        batch_arr = arr[tuple(sel_src)]
 
-                    region = tuple(
-                        slice(k_abs, k_abs + 1) if i == axis_t else slice(None)
-                        for i in range(self.ndim)
-                    )
-                    if self.zarr_format == 2:
-                        da.to_zarr(subset, self.datasets[lvl], region=region)
-                    else:
-                        # Zarr v3
-                        da.store(
-                            subset,
-                            self.datasets[lvl],
-                            regions=region,
-                            lock=True,
-                        )
+        # Destination region slice
+        region_tuple = tuple(
+            slice(start_T_dest, start_T_dest + total_T) if i == axis_t else slice(None)
+            for i in range(self.ndim)
+        )
+
+        # Per-level processing
+        for lvl in range(self.num_levels):
+            if lvl == 0:
+                level_block = batch_arr
+            else:
+                nextshape = list(self.level_shapes[lvl])
+                nextshape[axis_t] = total_T
+                level_block = resize(batch_arr, tuple(nextshape), order=0).astype(
+                    batch_arr.dtype
+                )
+
+            # Dispatch write depending on Zarr format
+            if self.zarr_format == 2:
+                da.to_zarr(level_block, self.datasets[lvl], region=region_tuple)
+            else:
+                da.store(
+                    level_block, self.datasets[lvl], regions=region_tuple, lock=True
+                )
 
     # -----------------
     # Internal plumbing
