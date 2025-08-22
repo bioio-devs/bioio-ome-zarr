@@ -151,11 +151,12 @@ writer.write_full_volume(da.from_array(data, chunks=(1, 1, 1, 8, 8)))
 
 ```python
 # Suppose your writer axes include "t"; write in batches to limit memory
-from bioio_ome_zarr import Reader
+from bioio import BioImage
 
-rdr = Reader("/path/to/large_source.ome.zarr")
-# Axes in writer and reader must match by set; order is handled by the writer
-writer.write_timepoints(rdr, tbatch=4, channel_indexes=[0, 2])
+bioimg = BioImage("/path/to/any/bioimage")
+data = bioimg.get_image_dask_data()
+
+writer.write_timepoints(data, tbatch=4, channel_indexes=[0, 2])
 ```
 
 ### Custom chunking per level

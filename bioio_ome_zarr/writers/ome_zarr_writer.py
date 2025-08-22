@@ -4,7 +4,6 @@ import dask.array as da
 import numcodecs
 import numpy as np
 import zarr
-from bioio_base.reader import Reader
 from numcodecs import Blosc as BloscV2
 from zarr.codecs import BloscCodec, BloscShuffle
 
@@ -189,14 +188,34 @@ class OMEZarrWriter:
         self.root_transform = root_transform
 
         # 8) Handles & state
-        self.root: Optional[zarr.Group] = None
-        self.datasets: List[zarr.Array] = []
+        self.root: Optional[zarr.Group]
+        self.datasets: List[zarr.Array]
         self._initialized: bool = False
         self._metadata_written: bool = False
 
     # -----------------
     # Public interface
     # -----------------
+    def preview_metadata(self) -> Dict[str, Any]:
+        """
+        Build and return the exact NGFF metadata dict(s) this writer will
+        persist. Safe to call before initializing the store; uses in-memory
+        config/state.
+        """
+        params = MetadataParams(
+            image_name=self.image_name,
+            axes=self.axes,
+            level_shapes=self.level_shapes,
+            channels=self.channels,
+            rdefs=self.rdefs,
+            creator_info=self.creator_info,
+            root_transform=self.root_transform,
+            dataset_scales=self.dataset_scales,
+        )
+        return build_ngff_metadata(
+            zarr_format=self.zarr_format,
+            params=params,
+        )
 
     def write_full_volume(
         self,
@@ -230,22 +249,19 @@ class OMEZarrWriter:
 
     def write_timepoints(
         self,
-        source: Union[Reader, np.ndarray, da.Array],
+        source: Union[np.ndarray, da.Array],
         *,
-        channel_indexes: Optional[List[int]] = None,
         tbatch: int = 1,
     ) -> None:
         """
-        Batch write along T. Writer and source axes must match by set (no
-        implicit expansion). Spatial axes are downsampled for lower levels; T
-        and C are preserved.
+        Batch write along T. Source must already match the writer’s axis
+        order and dimensionality. Spatial axes are downsampled for lower
+        levels; T and C are preserved.
         """
         if not self._initialized:
             self._initialize()
 
-        writer_axes = [
-            a.lower() for a in self.axes.names
-        ]  # e.g. ["t","c","y","x"] or ["t","c","z","y","x"]
+        writer_axes = [a.lower() for a in self.axes.names]
         if "t" not in writer_axes:
             raise ValueError(
                 "write_timepoints() requires a time axis 'T' in writer axes."
@@ -261,57 +277,27 @@ class OMEZarrWriter:
                 for i in range(self.ndim)
             )
 
+        # Wrap numpy in dask if needed
+        if isinstance(source, np.ndarray):
+            chunks = self.datasets[0].chunks
+            assert chunks is not None, "Writer datasets must have chunks."
+            arr = da.from_array(source, chunks=chunks)
+        else:
+            arr = source  # already dask
+
+        if arr.ndim != self.ndim:
+            raise ValueError(
+                f"Array source ndim ({arr.ndim}) must match writer.ndim ({self.ndim})."
+            )
+
         for start_t in range(0, total_T, tbatch):
             end_t = min(start_t + tbatch, total_T)
             if end_t <= start_t:
                 continue
 
-            if isinstance(source, Reader):
-                # axis presence comes from string like "TCYX", "TYX", etc.
-                reader_order = source.dims.order.lower()  # e.g. "tcyx"
-                reader_set = set(reader_order)
-                writer_set = set(writer_axes)
-
-                if reader_set != writer_set:
-                    raise ValueError(
-                        "Reader axes "
-                        f"{sorted(reader_set)} do not match writer axes "
-                        f"{sorted(writer_set)}. Configure the writer axes to "
-                        "match the Reader; no implicit expansion is performed."
-                    )
-                if "t" not in reader_set:
-                    raise ValueError("Reader lacks 'T' but writer expects time.")
-
-                # ask the Reader to return data in the WRITER'S axis order
-                request_order = "".join(ax.upper() for ax in writer_axes)
-
-                # only slice axes the reader actually has
-                slice_kwargs: Dict[str, Any] = {}
-                if "t" in reader_set:
-                    slice_kwargs["T"] = slice(start_t, end_t)
-                if "c" in reader_set and channel_indexes is not None:
-                    slice_kwargs["C"] = channel_indexes
-
-                block = source.get_image_dask_data(request_order, **slice_kwargs)
-
-            else:
-                # Array path: already in writer order & ndim (including T)
-                if isinstance(source, np.ndarray):
-                    chunks = self.datasets[0].chunks
-                    assert chunks is not None, "Writer datasets must have chunks."
-                    arr = da.from_array(source, chunks=chunks)
-                else:
-                    arr = source  # dask
-
-                if arr.ndim != self.ndim:
-                    raise ValueError(
-                        "Array source ndim "
-                        f"({arr.ndim}) must match writer.ndim ({self.ndim}). "
-                        "No implicit expansion or reordering is performed."
-                    )
-                sel: List[slice] = [slice(None)] * self.ndim
-                sel[axis_t] = slice(start_t, end_t)
-                block = arr[tuple(sel)]
+            sel: List[slice] = [slice(None)] * self.ndim
+            sel[axis_t] = slice(start_t, end_t)
+            block = arr[tuple(sel)]
 
             # Level 0: per‑T region writes
             for k_abs in range(start_t, end_t):
@@ -453,27 +439,6 @@ class OMEZarrWriter:
             store=self.store,
             overwrite=True,
             zarr_format=self.zarr_format,
-        )
-
-    def preview_metadata(self) -> Dict[str, Any]:
-        """
-        Build and return the exact NGFF metadata dict(s) this writer will
-        persist. Safe to call before initializing the store; uses in-memory
-        config/state.
-        """
-        params = MetadataParams(
-            image_name=self.image_name,
-            axes=self.axes,
-            level_shapes=self.level_shapes,
-            channels=self.channels,
-            rdefs=self.rdefs,
-            creator_info=self.creator_info,
-            root_transform=self.root_transform,
-            dataset_scales=self.dataset_scales,
-        )
-        return build_ngff_metadata(
-            zarr_format=self.zarr_format,
-            params=params,
         )
 
     def _write_metadata(self) -> None:
