@@ -271,12 +271,6 @@ class OMEZarrWriter:
         total_T = int(self.level_shapes[0][axis_t])
         tbatch = max(1, int(tbatch))
 
-        def _region_one(k_abs: int) -> Tuple[slice, ...]:
-            return tuple(
-                slice(k_abs, k_abs + 1) if i == axis_t else slice(None)
-                for i in range(self.ndim)
-            )
-
         # Wrap numpy in dask if needed
         if isinstance(source, np.ndarray):
             chunks = self.datasets[0].chunks
@@ -295,50 +289,40 @@ class OMEZarrWriter:
             if end_t <= start_t:
                 continue
 
-            sel: List[slice] = [slice(None)] * self.ndim
-            sel[axis_t] = slice(start_t, end_t)
-            block = arr[tuple(sel)]
+            # Slice this time batch once from the input
+            sel_batch: List[slice] = [slice(None)] * self.ndim
+            sel_batch[axis_t] = slice(start_t, end_t)
+            block = arr[tuple(sel_batch)]
 
-            # Level 0: per‑T region writes
-            for k_abs in range(start_t, end_t):
-                rel = k_abs - start_t
-                sel0: List[slice] = [slice(None)] * self.ndim
-                sel0[axis_t] = slice(rel, rel + 1)
-                subset = block[tuple(sel0)]
-
-                region_one = _region_one(k_abs)
-                if self.zarr_format == 2:
-                    da.to_zarr(subset, self.datasets[0], region=region_one)
+            # Process each level independently to avoid accumulating resized arrays
+            for lvl in range(self.num_levels):
+                if lvl == 0:
+                    level_block = block
                 else:
-                    # Zarr v3: pass slice tuple directly; array objects aren't hashable
-                    da.store(
-                        subset,
-                        self.datasets[0],
-                        regions=region_one,
-                        lock=True,
+                    nextshape = list(self.level_shapes[lvl])
+                    nextshape[axis_t] = end_t - start_t
+                    level_block = resize(block, tuple(nextshape), order=0).astype(
+                        block.dtype
                     )
-
-            # Lower levels: resize once, then per‑T region writes
-            for lvl in range(1, self.num_levels):
-                nextshape = list(self.level_shapes[lvl])
-                nextshape[axis_t] = end_t - start_t
-                resized = resize(block, tuple(nextshape), order=0).astype(block.dtype)
 
                 for k_abs in range(start_t, end_t):
                     rel = k_abs - start_t
-                    sel1: List[slice] = [slice(None)] * self.ndim
-                    sel1[axis_t] = slice(rel, rel + 1)
-                    subset = resized[tuple(sel1)]
+                    sel_one: List[slice] = [slice(None)] * self.ndim
+                    sel_one[axis_t] = slice(rel, rel + 1)
+                    subset = level_block[tuple(sel_one)]
 
-                    region_one = _region_one(k_abs)
+                    region = tuple(
+                        slice(k_abs, k_abs + 1) if i == axis_t else slice(None)
+                        for i in range(self.ndim)
+                    )
                     if self.zarr_format == 2:
-                        da.to_zarr(subset, self.datasets[lvl], region=region_one)
+                        da.to_zarr(subset, self.datasets[lvl], region=region)
                     else:
                         # Zarr v3
                         da.store(
                             subset,
                             self.datasets[lvl],
-                            regions=region_one,
+                            regions=region,
                             lock=True,
                         )
 
