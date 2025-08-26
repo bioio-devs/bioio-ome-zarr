@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from ngff_zarr import from_ngff_zarr
 
+from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import (
     DimTuple,
     OmeZarrWriterV2,
@@ -126,6 +127,12 @@ def test_write_ome_zarr(
     axis_names = [ax.name for ax in ms.metadata.axes]
     assert "".join(axis_names).upper() == "TCZYX"
 
+    assert Reader.is_supported_image(save_uri)
+    reader = Reader(str(save_uri))
+    assert reader is not None
+    assert len(reader.shape) >= len(expected_shapes[0])
+    assert reader.shape == expected_shapes[0]
+
 
 @array_constructor
 @pytest.mark.parametrize(
@@ -211,3 +218,9 @@ def test_write_ome_zarr_iterative(
     # also verify that level-0 data round-trips correctly
     for t in range(shape[0]):
         np.testing.assert_array_equal(ms.images[0].data[t], im[t])
+
+    assert Reader.is_supported_image(save_uri)
+    reader = Reader(str(save_uri))
+    assert reader is not None
+    assert len(reader.shape) >= len(expected_shapes[0])
+    assert reader.shape == expected_shapes[0]

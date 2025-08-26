@@ -9,6 +9,7 @@ import pytest
 import zarr
 from ngff_zarr.validate import validate
 
+import bioio_ome_zarr as boz
 from bioio_ome_zarr.writers import Channel, OmeZarrWriterV3
 
 from ..conftest import LOCAL_RESOURCES_DIR
@@ -61,12 +62,12 @@ def test_write_full_volume_and_metadata(
     data_generator: Any,
     expected_shapes: List[Tuple[int, ...]],
 ) -> None:
-    tmpdir = tempfile.mkdtemp()
+    created_zarr = tempfile.mkdtemp(suffix=".zarr")
     try:
         # Arrange
         data = data_generator()
         writer_kwargs = {
-            "store": tmpdir,
+            "store": created_zarr,
             "shape": shape,
             "dtype": data.dtype,
             "scale_factors": tuple(2 for _ in shape),
@@ -83,7 +84,7 @@ def test_write_full_volume_and_metadata(
         writer.write_full_volume(data)
 
         # Assert: check shapes and metadata
-        grp = zarr.open(tmpdir, mode="r")
+        grp = zarr.open(created_zarr, mode="r")
         for idx, exp_shape in enumerate(expected_shapes):
             arr = grp[str(idx)]
             assert arr.shape == exp_shape
@@ -93,8 +94,14 @@ def test_write_full_volume_and_metadata(
 
         ms = ome_meta["ome"]["multiscales"][0]
         assert len(ms["datasets"]) == len(expected_shapes)
+
+        assert boz.Reader.is_supported_image(created_zarr)
+        reader = boz.Reader(str(created_zarr))
+        assert reader is not None
+        assert len(reader.shape) >= len(expected_shapes[0])
+        assert reader.shape == expected_shapes[0]
     finally:
-        shutil.rmtree(tmpdir)
+        shutil.rmtree(created_zarr)
 
 
 @pytest.mark.parametrize(
