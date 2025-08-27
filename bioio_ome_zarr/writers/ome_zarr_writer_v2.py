@@ -1,4 +1,5 @@
 import logging
+import warnings
 from dataclasses import asdict
 from typing import List, Optional, Tuple, Union
 
@@ -6,16 +7,36 @@ import dask.array as da
 import numcodecs
 import numpy as np
 import zarr
-from ngff_zarr.zarr_metadata import Axis, Dataset, Metadata, Scale, Translation
+from bioio_base.reader import Reader
 from zarr.storage import FsspecStore, LocalStore
-
-from bioio_ome_zarr import Reader
 
 from .utils import DimTuple, ZarrLevel, resize
 
 log = logging.getLogger(__name__)
 
 OME_NGFF_VERSION = "0.4"
+
+# Try to import ngff_zarr, but don’t require it
+try:
+    from ngff_zarr.zarr_metadata import Axis, Dataset, Metadata, Scale, Translation
+
+    _HAS_NGFF_ZARR = True
+except ImportError:
+    Axis = Dataset = Metadata = Scale = Translation = None  # type: ignore
+    _HAS_NGFF_ZARR = False
+
+
+def _require_ngff_zarr() -> None:
+    if not _HAS_NGFF_ZARR:
+        warnings.warn(
+            "OMEZarrWriter relies on ngff-zarr for metadata support. "
+            "This package is deprecated and ngff-zarr is no longer a dependency. "
+            "If you still need this functionality, install ngff-zarr manually. "
+            "This writer will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        raise RuntimeError("ngff-zarr not available: cannot generate NGFF metadata.")
 
 
 def dim_tuple_to_dict(
@@ -74,6 +95,15 @@ class OMEZarrWriter:
     """Class to write OME-Zarr files."""
 
     def __init__(self) -> None:
+        warnings.warn(
+            (
+                "OmeZarrWriterV2 is deprecated and will be removed in"
+                " a future release. Please use OMEZarrWriter instead."
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         self.output_path = ""
         self.levels: List[ZarrLevel] = []
         self.store = None
@@ -133,6 +163,7 @@ class OMEZarrWriter:
                 dtype=dtype,
                 compressor=compressor,
                 zarr_format=2,
+                dimension_separator="/",
             )
             self.levels.append(ZarrLevel(shape, level_chunk_sizes[i], dtype, arr))
 
@@ -309,6 +340,8 @@ class OMEZarrWriter:
             string. E.g. {"x":"micrometer", "y":"micrometer", "z":"micrometer",
             "t":"minute"}
         """
+        _require_ngff_zarr()
+
         dims = ("t", "c", "z", "y", "x")
         axes = []
         for dim in dims:

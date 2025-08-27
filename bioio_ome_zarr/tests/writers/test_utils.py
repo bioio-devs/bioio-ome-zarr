@@ -11,7 +11,6 @@ from bioio_ome_zarr.writers import (
     add_zarr_level,
     chunk_size_from_memory_target,
     compute_level_chunk_sizes_zslice,
-    compute_level_shapes,
     get_scale_ratio,
     resize,
 )
@@ -59,59 +58,6 @@ def test_chunk_size_from_memory_target(
       - >5D case xfails with ValueError when order=None
     """
     out = chunk_size_from_memory_target(shape, dtype, target)
-    assert out == expected
-
-
-@pytest.mark.parametrize(
-    "base_shape, axis_names, axis_factors, max_levels, expected",
-    [
-        ((64, 64), ["y", "x"], (2, 2), 3, [(64, 64), (32, 32), (16, 16)]),
-        (
-            (8, 64, 64),
-            ["z", "y", "x"],
-            (1, 2, 2),
-            4,
-            [(8, 64, 64), (8, 32, 32), (8, 16, 16), (8, 8, 8)],
-        ),
-        (
-            (5, 32, 64, 64),
-            ["t", "z", "y", "x"],
-            (1, 1, 2, 2),
-            2,
-            [(5, 32, 64, 64), (5, 32, 32, 32)],
-        ),
-        (
-            (1, 1, 1, 4, 4),
-            ["t", "c", "z", "y", "x"],
-            (1, 1, 1, 2, 2),
-            2,
-            [(1, 1, 1, 4, 4), (1, 1, 1, 2, 2)],
-        ),
-    ],
-)
-def test_compute_level_shapes_v3(
-    base_shape: Tuple[int, ...],
-    axis_names: List[str],
-    axis_factors: Tuple[int, ...],
-    max_levels: int,
-    expected: List[Tuple[int, ...]],
-) -> None:
-    """
-    Test the V3 compute_level_shapes signature.
-    """
-    out = compute_level_shapes(base_shape, axis_names, axis_factors, max_levels)
-    assert out == expected
-
-
-def test_compute_level_shapes_legacy() -> None:
-    """
-    Test the legacy compute_level_shapes signature.
-    """
-    base_shape: Tuple[int, ...] = (1, 1, 1, 4, 4)
-    scaling: Tuple[float, ...] = (1.0, 1.0, 1.0, 2.0, 2.0)
-    levels: int = 2
-    expected: List[Tuple[int, ...]] = [(1, 1, 1, 4, 4), (1, 1, 1, 2, 2)]
-    out = compute_level_shapes(base_shape, scaling, levels)
     assert out == expected
 
 
