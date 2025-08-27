@@ -3,7 +3,7 @@ import shutil
 
 import numpy as np
 import zarr
-from bioio_ome_zarr.writers import Channel, OmeZarrWriterV3
+from bioio_ome_zarr.writers import Channel, OMEZarrWriter
 
 # NOTE: This script will load image completely into memory and is not meant for large files 
 
@@ -162,7 +162,7 @@ creator_info = v2_attrs.get("_creator", None)
 
 # 18) Instantiate the V3 writer with exactly num_levels levels,
 #     including top-level scale if found
-writer = OmeZarrWriterV3(
+writer = OMEZarrWriter(
     store=output_store,
     shape=full_shape,
     dtype=dtype,
