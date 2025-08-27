@@ -8,6 +8,7 @@ import pytest
 import zarr
 from ngff_zarr.validate import validate
 
+from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import Channel, OMEZarrWriter
 from bioio_ome_zarr.writers.utils import DimTuple
 
@@ -214,6 +215,12 @@ def test_write_pyramid(
         assert len(attrs["multiscales"][0]["datasets"]) == len(expected_shapes)
     else:
         assert len(attrs["ome"]["multiscales"][0]["datasets"]) == len(expected_shapes)
+
+    # validate bioio_ome_zarr reader
+    reader = Reader(str(save_uri))
+    assert reader is not None
+    assert len(reader.shape) >= len(expected_shapes[0])
+    assert reader.shape == expected_shapes[0]
 
 
 @pytest.mark.parametrize(
