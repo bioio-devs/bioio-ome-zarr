@@ -3,7 +3,7 @@
 
 
 import pathlib
-from typing import Callable, List, Optional, Tuple, Union, cast
+from typing import Callable, List, Tuple, cast
 
 import numpy as np
 import pytest
@@ -14,63 +14,10 @@ from bioio_ome_zarr.writers import (
     OmeZarrWriterV2,
     chunk_size_from_memory_target,
     compute_level_chunk_sizes_zslice,
+    compute_level_shapes,
 )
 
 from ..conftest import array_constructor
-
-
-def compute_level_shapes(
-    lvl0shape: Tuple[int, ...],
-    scaling: Union[Tuple[float, ...], List[str]],
-    nlevels: Union[int, Tuple[int, ...]],
-    max_levels: Optional[int] = None,
-) -> List[Tuple[int, ...]]:
-    """
-    Compute multiscale pyramid level shapes.
-
-    Supports two signatures:
-      - Legacy: (lvl0shape, scaling: Tuple[float,...], nlevels: int)
-      - V3:     (base_shape, axis_names: List[str],
-                axis_factors: Tuple[int,...], max_levels: int)
-    """
-    # V3 mode: scaling is list of axis names, nlevels is tuple of int factors
-    if (
-        isinstance(scaling, list)
-        and all(isinstance(n, str) for n in scaling)
-        and isinstance(nlevels, tuple)
-    ):
-        axis_names = [n.lower() for n in scaling]
-        axis_factors = nlevels
-        shapes: List[Tuple[int, ...]] = [tuple(lvl0shape)]
-        lvl = 1
-        while max_levels is None or lvl < (max_levels or 0):
-            prev = shapes[-1]
-            nxt: List[int] = []
-            for i, size in enumerate(prev):
-                name = axis_names[i]
-                factor = axis_factors[i]
-                if name in ("x", "y") and factor > 1:
-                    nxt.append(max(1, size // factor))
-                else:
-                    nxt.append(size)
-            nxt_tuple = tuple(nxt)
-            if nxt_tuple == prev:
-                break
-            shapes.append(nxt_tuple)
-            lvl += 1
-        return shapes
-    # Legacy mode: scaling is tuple of floats, nlevels is int
-    scaling_factors = cast(Tuple[float, ...], scaling)
-    num_levels = cast(int, nlevels)
-    # Reuse the same variable 'shapes' without re-annotation
-    shapes = [tuple(lvl0shape)]
-    for _ in range(num_levels - 1):
-        prev = shapes[-1]
-        next_shape = tuple(
-            max(int(prev[i] / scaling_factors[i]), 1) for i in range(len(prev))
-        )
-        shapes.append(next_shape)
-    return shapes
 
 
 @pytest.mark.parametrize(

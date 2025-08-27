@@ -310,8 +310,8 @@ add_zarr_level(
 
 ## 🚨 Deprecation Notice
 
-The legacy **OmeZarrWriterV2** class (referred to here as “V2 Writer”) is **deprecated** and will be removed in a future release.
-It has been replaced by the new **OMEZarrWriter**, which supports writing to **both Zarr v2 (NGFF 0.4)** and **Zarr v3 (NGFF 0.5)** formats.
+The legacy **OmeZarrWriterV2** class (referred to here as “V2 Writer”) and **OmeZarrWriterV3** class (referred to here as “V3 Writer”) are **deprecated** and will be removed in a future release.
+They has been replaced by the new **OMEZarrWriter**, which supports writing to **both Zarr v2 (NGFF 0.4)** and **Zarr v3 (NGFF 0.5)** formats.
 
 For new code, please **use OMEZarrWriter**.
 
