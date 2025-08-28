@@ -30,7 +30,7 @@ dependencies = [
     "s3fs>=2023.9.0",
     "scikit-image!=0.23.0",
     "xarray>=0.16.1",
-    "zarr>=3.1.0",
+    "zarr>=3.1.0,<3.1.2",
 ]
 
 [project.urls]
