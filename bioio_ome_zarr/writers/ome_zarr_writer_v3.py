@@ -1,3 +1,4 @@
+import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import dask.array as da
@@ -5,8 +6,7 @@ import numpy as np
 import zarr
 from zarr.codecs import BloscCodec, BloscShuffle
 
-from .axes import Axes
-from .channel import Channel
+from .metadata import Axes, Channel
 from .utils import chunk_size_from_memory_target, compute_level_shapes, resize
 
 
@@ -79,6 +79,16 @@ class OMEZarrWriterV3:
             Top-level multiscale coordinate transformation
             (e.g. {"type":"scale","scale":[...]}).
         """
+
+        warnings.warn(
+            (
+                "OmeZarrWriterV3 is deprecated and will be removed in"
+                " a future release. Please use OMEZarrWriter instead."
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         # 1) Store fundamental properties
         self.store = store
         self.shape = tuple(shape)
