@@ -27,11 +27,10 @@ dynamic = ["version"]
 dependencies = [
     "bioio-base>=1.4.0",
     "fsspec[http]>=2022.8.0",
-    "ngff-zarr[validate]>=0.8.2",
     "s3fs>=2023.9.0",
     "scikit-image!=0.23.0",
     "xarray>=0.16.1",
-    "zarr>=3.1.0",
+    "zarr>=3.1.0,<3.1.2",
 ]
 
 [project.urls]
@@ -46,6 +45,7 @@ lint = [
   "pre-commit>=2.20.0",
 ]
 test = [
+  "ngff-zarr[validate]>=0.8.2",
   "coverage>=5.1",
   "pytest>=5.4.3",
   "pytest-cov>=2.9.0",
@@ -58,6 +58,7 @@ test = [
 bioio-ome-zarr = "bioio_ome_zarr"
 
 [project.entry-points."bioio.writers"]
+OMEZarrWriter = "bioio_ome_zarr.writers:OMEZarrWriter"
 OmeZarrWriterV2 = "bioio_ome_zarr.writers:OmeZarrWriterV2"
 OmeZarrWriterV3 = "bioio_ome_zarr.writers:OmeZarrWriterV3"
 
