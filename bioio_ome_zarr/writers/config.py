@@ -1,4 +1,4 @@
-from typing import Any, Dict, Union
+from typing import Any, Dict, Tuple, Union
 
 import dask.array as da
 import numpy as np
@@ -6,101 +6,71 @@ import numpy as np
 from .utils import chunk_size_from_memory_target
 
 
-def get_ome_zarr_writer_config_for_viz(
+def get_default_config_for_viz(
     data: Union[np.ndarray, da.Array],
 ) -> Dict[str, Any]:
     """
-    Generate a default OmeZarrWriterV3 config for visualization use.
-
-    Parameters
-    ----------
-    data : Union[np.ndarray, dask.array.Array]
-        Input data to inspect (e.g. shape TCZYX or similar).
-
-    Returns
-    -------
-    config : Dict[str, Any]
-        A config dictionary to pass into `OmeZarrWriterV3`.
-        Customize fields after calling this function.
-
-    Example
-    -------
-    >>> import numpy as np
-    >>> from bioio_ome_zarr.writers import OmeZarrWriterV3
-    >>> from bioio_ome_zarr.writers import get_ome_zarr_writer_config_for_viz
-    >>>
-    >>> data = np.zeros((1, 1, 16, 256, 256), dtype="uint16")  # TCZYX
-    >>> config = get_ome_zarr_writer_config_for_viz(data)
-    >>> writer = OmeZarrWriterV3("output.zarr", **config)
-    >>> writer.write_full_volume(data)
+    Visualization preset:
+      - 3-level XY pyramid (0.5, 0.25 on Y/X)
+      - ~16 MiB chunking reused for all levels
+      - Let the writer infer axes, zarr_format, image_name, etc.
     """
-    shape = data.shape
-    dtype = data.dtype
+    shape: Tuple[int, ...] = tuple(data.shape)
+    dtype = np.dtype(getattr(data, "dtype", np.uint16))
+
+    # Inline _build_xy_scales
     ndim = len(shape)
+    if ndim < 2:
+        scale: Tuple[Tuple[float, ...], ...] = tuple()
+    else:
+        scales_list = []
+        for k in (1, 2):  # levels beyond 0
+            vec = [1.0] * ndim
+            vec[-1] = 2.0 ** (-k)  # X
+            vec[-2] = 2.0 ** (-k)  # Y
+            scales_list.append(tuple(vec))
+        scale = tuple(scales_list)
 
-    default_axis_order = ["t", "c", "z", "y", "x"]
-    axes_names = default_axis_order[-ndim:]
-
-    scale_factors = tuple(2 if ax in ("y", "x") else 1 for ax in axes_names)
-
-    chunk_size = chunk_size_from_memory_target(shape, dtype, 16 << 20)
+    chunk_shape = tuple(
+        int(x) for x in chunk_size_from_memory_target(shape, dtype, 16 << 20)
+    )
 
     return {
         "shape": shape,
         "dtype": dtype,
-        "axes_names": axes_names,
-        "scale_factors": scale_factors,
-        "chunk_size": chunk_size,
-        "num_levels": 3,
-        "image_name": "Image",
+        "scale": scale,
+        "chunk_shape": chunk_shape,
     }
 
 
-def get_ome_zarr_writer_config_for_ml(
+def get_default_config_for_ml(
     data: Union[np.ndarray, da.Array],
 ) -> Dict[str, Any]:
     """
-    Generate a default OmeZarrWriterV3 config for machine learning use.
-
-    Parameters
-    ----------
-    data : Union[np.ndarray, dask.array.Array]
-        Input data to inspect (e.g. shape TCZYX or similar).
-
-    Returns
-    -------
-    config : Dict[str, Any]
-        A config dictionary to pass into `OmeZarrWriterV3`.
-        Customize fields after calling this function.
-
-    Example
-    -------
-    >>> import numpy as np
-    >>> from bioio_ome_zarr.writers import OmeZarrWriterV3
-    >>> from bioio_ome_zarr.writers import get_ome_zarr_writer_config_for_ml
-    >>>
-    >>> data = np.zeros((1, 1, 16, 256, 256), dtype="uint16")  # TCZYX
-    >>> config = get_ome_zarr_writer_config_for_ml(data)
-    >>> writer = OmeZarrWriterV3("output.zarr", **config)
-    >>> writer.write_full_volume(data)
+    ML preset:
+      - Level-0 only (no pyramid)
+      - Z-slice chunking (Z=1) when Z exists; ~16 MiB target otherwise
+      - Writer infers everything else.
     """
-    shape = data.shape
-    dtype = data.dtype
+    shape: Tuple[int, ...] = tuple(data.shape)
+    dtype = np.dtype(getattr(data, "dtype", np.uint16))
+
+    base_chunk = tuple(
+        int(x) for x in chunk_size_from_memory_target(shape, dtype, 16 << 20)
+    )
+
     ndim = len(shape)
-
-    default_axis_order = ["t", "c", "z", "y", "x"]
-    axes_names = default_axis_order[-ndim:]
-
-    scale_factors = tuple(2 if ax in ("y", "x") else 1 for ax in axes_names)
-
-    chunk_size = chunk_size_from_memory_target(shape, dtype, 16 << 20)
+    if ndim >= 3:
+        z_idx = ndim - 3
+        tmp = list(base_chunk)
+        tmp[z_idx] = 1
+        chunk_shape = tuple(int(x) for x in tmp)
+    else:
+        chunk_shape = base_chunk
 
     return {
         "shape": shape,
         "dtype": dtype,
-        "axes_names": axes_names,
-        "scale_factors": scale_factors,
-        "chunk_size": chunk_size,
-        "num_levels": 3,
-        "image_name": "Image",
+        "scale": tuple(),  # no extra levels
+        "chunk_shape": chunk_shape,
     }

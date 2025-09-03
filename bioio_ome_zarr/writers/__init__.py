@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 from .config import (
-    get_ome_zarr_writer_config_for_ml,
-    get_ome_zarr_writer_config_for_viz,
+    get_default_config_for_ml,
+    get_default_config_for_viz,
 )
 from .metadata import Axes, Channel, MetadataParams, build_ngff_metadata
 from .ome_zarr_writer import OMEZarrWriter as OMEZarrWriter
@@ -34,6 +34,6 @@ __all__ = [
     "compute_level_shapes",
     "resize",
     "get_scale_ratio",
-    "get_ome_zarr_writer_config_for_ml",
-    "get_ome_zarr_writer_config_for_viz",
+    "get_default_config_for_ml",
+    "get_default_config_for_viz",
 ]
