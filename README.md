@@ -307,6 +307,34 @@ add_zarr_level(
     compressor=numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
 )
 ```
+### Using Config Presets
+
+Config presets make it easy to get started with `OMEZarrWriter` without needing to know all of its options. They inspect your input data and return a configuration dictionary that you can pass directly into the writer.
+
+#### Visualization preset
+
+The visualization preset (`get_default_config_for_viz`) creates a multiscale pyramid (full resolution plus downsampled levels along Y/X) suitable for interactive browsing.
+
+```python
+import numpy as np
+from bioio_ome_zarr.writers import (
+    OMEZarrWriter,
+    get_default_config_for_viz,
+)
+
+data = np.zeros((1, 1, 4, 64, 64), dtype="uint16")
+
+cfg = get_default_config_for_viz(data)
+writer = OMEZarrWriter("output.zarr", **cfg)
+writer.write_full_volume(data)
+```
+
+This produces a Zarr store with the original data and additional lower-resolution levels for visualization.
+
+#### Machine learning preset
+
+The ML preset (`get_default_config_for_ml`) writes only the full-resolution data, chunked to optimize for patch-wise access often used in training pipelines.
+
 
 ## 🚨 Deprecation Notice
 
