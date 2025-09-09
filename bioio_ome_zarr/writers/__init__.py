@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from .config import (
+    get_default_config_for_ml,
+    get_default_config_for_viz,
+)
 from .metadata import Axes, Channel, MetadataParams, build_ngff_metadata
 from .ome_zarr_writer import OMEZarrWriter as OMEZarrWriter
 from .ome_zarr_writer_v2 import OMEZarrWriter as OmeZarrWriterV2
@@ -30,4 +34,6 @@ __all__ = [
     "compute_level_shapes",
     "resize",
     "get_scale_ratio",
+    "get_default_config_for_ml",
+    "get_default_config_for_viz",
 ]
