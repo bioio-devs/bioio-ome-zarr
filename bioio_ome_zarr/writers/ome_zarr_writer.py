@@ -110,7 +110,7 @@ class OMEZarrWriter:
         shard_shape : Optional[LevelwiseSpec]
             **Zarr v3 only.** Either:
               - a single N-dim tuple applied to all levels, or
-              - a per-level tuple-of-tuples.
+              - a per-level list-of-tuples.
             Ignored for Zarr v2.
         compressor : Optional[BloscCodec | numcodecs.abc.Codec]
             Compression codec. For v2 use ``numcodecs.Blosc``; for v3 use
