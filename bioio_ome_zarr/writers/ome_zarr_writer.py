@@ -15,7 +15,7 @@ from .utils import (
 )
 
 DimTuple = Tuple[int, ...]
-PerLevelDimTuple = Tuple[DimTuple, ...]
+PerLevelDimTuple = List[DimTuple]
 LevelwiseSpec = Union[DimTuple, PerLevelDimTuple]
 
 

@@ -341,7 +341,7 @@ def test_v3_sharding_and_chunking(
         shape=shape,
         dtype=data.dtype,
         zarr_format=3,
-        chunk_shape=(chunk_size,),
+        chunk_shape=chunk_size,
         shard_shape=shard_shape,
     )
 
@@ -413,7 +413,7 @@ def test_v3_metadata_against_reference(
     data = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
     ch0 = Channel(**channel_kwargs)
     store_dir = str(tmp_path / "ref_test_v3.zarr")
-    chunk_shape = tuple(tuple(chunk_size) for _ in range(1 + len(scale)))
+    chunk_shape = [tuple(chunk_size) for _ in range(1 + len(scale))]
 
     writer = OMEZarrWriter(
         store=store_dir,
@@ -570,7 +570,7 @@ def test_full_vs_timepoints_equivalence(
     data = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
     full_store = str(tmp_path / "full.zarr")
     tp_store = str(tmp_path / "tp.zarr")
-    chunk_shape = tuple(tuple(chunk_size) for _ in range(1 + len(scale)))
+    chunk_shape = [tuple(chunk_size) for _ in range(1 + len(scale))]
 
     w_full = OMEZarrWriter(
         store=full_store,
