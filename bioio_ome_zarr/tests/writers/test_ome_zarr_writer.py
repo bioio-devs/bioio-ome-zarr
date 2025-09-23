@@ -313,25 +313,25 @@ def test_write_timepoints_array(
 
 
 @pytest.mark.parametrize(
-    "shape, chunk_size, shard_factor",
+    "shape, chunk_size, shard_shape",
     [
         # 2D YX, shard 2x2
-        ((16, 16), (4, 4), (2, 2)),
+        ((16, 16), (4, 4), [(4, 4)]),
         # 3D TYX, shard 1x2x2
-        ((2, 16, 16), (1, 4, 4), (1, 2, 2)),
+        ((2, 16, 16), (1, 4, 4), [(1, 8, 8)]),
         # 4D CZYX, shard 1x1x2x2
-        ((2, 2, 16, 16), (1, 1, 4, 4), (1, 1, 2, 2)),
+        ((2, 2, 16, 16), (1, 1, 4, 4), [(2, 2, 16, 16)]),
         # 4D TZYX, shard 1x1x2x2
-        ((3, 2, 16, 16), (1, 1, 4, 4), (1, 1, 2, 2)),
+        ((3, 2, 16, 16), (1, 1, 4, 4), [(1, 2, 16, 16)]),
         # 5D TCZYX, shard 1x1x1x2x2
-        ((2, 2, 2, 16, 16), (1, 1, 1, 4, 4), (1, 1, 1, 2, 2)),
+        ((2, 2, 2, 16, 16), (1, 1, 1, 4, 4), [(2, 2, 2, 16, 16)]),
     ],
 )
 def test_v3_sharding_and_chunking(
     tmp_path: Any,
     shape: Tuple[int, ...],
     chunk_size: Tuple[int, ...],
-    shard_factor: Tuple[int, ...],
+    shard_shape: list[tuple[int, ...]],
 ) -> None:
     # Arrange
     data = np.zeros(shape, dtype=np.uint8)
@@ -342,7 +342,7 @@ def test_v3_sharding_and_chunking(
         dtype=data.dtype,
         zarr_format=3,
         chunk_shape=(chunk_size,),
-        shard_factor=shard_factor,
+        shard_shape=shard_shape,
     )
 
     # Act
@@ -353,13 +353,12 @@ def test_v3_sharding_and_chunking(
     arr = grp["0"]
     assert arr.shape == shape
     assert arr.chunks == chunk_size
-    expected_shard = tuple(chunk_size[i] * shard_factor[i] for i in range(len(shape)))
-    assert arr.shards == expected_shard
+    assert arr.shards == shard_shape[0]
 
 
 @pytest.mark.parametrize(
     "shape, axes_names, axes_types, axes_units, physical_pixel_size, scale, "
-    "channel_kwargs, chunk_size, shard_factor, filename",
+    "channel_kwargs, chunk_size, shard_shape, filename",
     [
         # 5D TCZYX metadata reference (levels to 1×1)
         (
@@ -379,7 +378,7 @@ def test_v3_sharding_and_chunking(
                 "window": {"min": 0, "max": 255, "start": 0, "end": 255},
             },
             (1, 1, 1, 4, 4),
-            (1, 1, 1, 2, 2),
+            [(1, 1, 1, 4, 4), (1, 1, 1, 4, 4), (1, 1, 1, 4, 4)],
             "reference_zarr.json",
         ),
         # 3D TYX metadata reference (levels to 2×2 then 1×1)
@@ -392,7 +391,7 @@ def test_v3_sharding_and_chunking(
             ((1, 0.5, 0.5), (1, 0.25, 0.25)),
             {"label": "Ch0", "color": "FF0000"},
             (1, 4, 4),
-            (1, 2, 2),
+            [(1, 4, 4), (1, 4, 4), (1, 4, 4)],
             "reference_zarr_tyx.json",
         ),
     ],
@@ -407,7 +406,7 @@ def test_v3_metadata_against_reference(
     scale: Any,
     channel_kwargs: Any,
     chunk_size: Any,
-    shard_factor: Any,
+    shard_shape: Any,
     filename: Any,
 ) -> None:
     # Arrange
@@ -427,7 +426,7 @@ def test_v3_metadata_against_reference(
         physical_pixel_size=physical_pixel_size,
         scale=scale,
         chunk_shape=chunk_shape,
-        shard_factor=shard_factor,
+        shard_shape=shard_shape,
         channels=[ch0],
         creator_info={"name": "pytest", "version": "0.1"},
     )
@@ -445,7 +444,7 @@ def test_v3_metadata_against_reference(
 
 
 @pytest.mark.parametrize(
-    "zarr_format, shape, axes_names, axes_types, scale, chunk_size, shard_factor",
+    "zarr_format, shape, axes_names, axes_types, scale, chunk_size, shard_shape",
     [
         # 3D TYX small: 4->2->1
         (
@@ -455,7 +454,7 @@ def test_v3_metadata_against_reference(
             ["time", "space", "space"],
             ((1, 0.5, 0.5), (1, 0.25, 0.25)),
             (1, 2, 2),
-            (1, 1, 1),
+            [(2, 4, 4), (2, 4, 4), (2, 4, 4)],
         ),
         (
             3,
@@ -464,7 +463,7 @@ def test_v3_metadata_against_reference(
             ["time", "space", "space"],
             ((1, 0.5, 0.5), (1, 0.25, 0.25)),
             (1, 2, 2),
-            (1, 1, 1),
+            [(2, 4, 4), (2, 4, 4), (2, 4, 4)],
         ),
         # 3D TYX rectangular: 6->2->1 with /3 per level
         (
@@ -474,7 +473,7 @@ def test_v3_metadata_against_reference(
             ["time", "space", "space"],
             ((1, 1 / 3, 1 / 3), (1, 1 / 6, 1 / 6)),
             (1, 2, 2),
-            (1, 1, 1),
+            [(2, 4, 4), (2, 4, 4), (2, 4, 4)],
         ),
         (
             3,
@@ -483,7 +482,7 @@ def test_v3_metadata_against_reference(
             ["time", "space", "space"],
             ((1, 1 / 3, 1 / 3), (1, 1 / 6, 1 / 6)),
             (1, 2, 2),
-            (1, 1, 1),
+            [(2, 4, 4), (2, 4, 4), (2, 4, 4)],
         ),
         # 3D TYX large spatial: 128 -> 32 -> 8 -> 2 -> 1 (four levels)
         (
@@ -498,7 +497,7 @@ def test_v3_metadata_against_reference(
                 (1, 0.0078125, 0.0078125),
             ),
             (1, 32, 32),
-            (1, 2, 2),
+            [(4, 64, 64), (4, 64, 64), (4, 64, 64), (4, 64, 64), (2, 64, 64)],
         ),
         (
             3,
@@ -512,7 +511,7 @@ def test_v3_metadata_against_reference(
                 (1, 0.0078125, 0.0078125),
             ),
             (1, 32, 32),
-            (1, 2, 2),
+            [(2, 64, 64), (2, 64, 64), (2, 64, 64), (2, 64, 64), (2, 64, 64)],
         ),
         # 5D TCZYX large: spatial (Y/X) /4 per level; Z /2 until 1 (4 levels total)
         (
@@ -527,7 +526,13 @@ def test_v3_metadata_against_reference(
                 (1, 1, 0.25, 0.0078125, 0.0078125),
             ),
             (1, 1, 2, 32, 32),
-            (1, 1, 1, 2, 2),
+            [
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 64, 64),
+            ],
         ),
         (
             3,
@@ -541,7 +546,13 @@ def test_v3_metadata_against_reference(
                 (1, 1, 0.25, 0.0078125, 0.0078125),
             ),
             (1, 1, 2, 32, 32),
-            (1, 1, 1, 2, 2),
+            [
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 64, 64),
+            ],
         ),
     ],
 )
@@ -553,7 +564,7 @@ def test_full_vs_timepoints_equivalence(
     axes_types: List[str],
     scale: Tuple[Tuple[float, ...], ...],
     chunk_size: Tuple[int, ...],
-    shard_factor: Tuple[int, ...],
+    shard_shape: list[tuple[int, ...]],
 ) -> None:
     # Arrange
     data = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
@@ -570,7 +581,7 @@ def test_full_vs_timepoints_equivalence(
         axes_types=axes_types,
         scale=scale,
         chunk_shape=chunk_shape,
-        shard_factor=shard_factor,
+        shard_shape=shard_shape,
     )
     w_tp = OMEZarrWriter(
         store=tp_store,
@@ -581,7 +592,7 @@ def test_full_vs_timepoints_equivalence(
         axes_types=axes_types,
         scale=scale,
         chunk_shape=chunk_shape,
-        shard_factor=shard_factor,
+        shard_shape=shard_shape,
     )
 
     # Act
@@ -597,9 +608,9 @@ def test_full_vs_timepoints_equivalence(
         arr_tp = grp_tp[str(lvl)]
 
         np.testing.assert_array_equal(arr_full[...], arr_tp[...])  # data
-        assert arr_full.chunks == chunk_size  # chunks
+        assert arr_full.chunks == chunk_size
         assert arr_tp.chunks == chunk_size
         if zarr_format == 3:  # shards (v3)
-            expected_shard = tuple(c * s for c, s in zip(chunk_size, shard_factor))
+            expected_shard = shard_shape[lvl]
             assert arr_full.shards == expected_shard
             assert arr_tp.shards == expected_shard

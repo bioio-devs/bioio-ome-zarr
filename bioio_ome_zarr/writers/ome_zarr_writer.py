@@ -35,7 +35,7 @@ class OMEZarrWriter:
         *,
         scale: Optional[Tuple[Tuple[float, ...], ...]] = None,
         chunk_shape: Optional[ChunkShape] = None,
-        shard_factor: Optional[Tuple[int, ...]] = None,
+        shard_shape: Optional[List[Tuple[int, ...]]] = None,
         compressor: Optional[Union[BloscCodec, numcodecs.abc.Codec]] = None,
         zarr_format: Literal[2, 3] = 3,
         image_name: Optional[str] = "Image",
@@ -74,8 +74,10 @@ class OMEZarrWriter:
             a suggested ≈16 MiB chunk is derived from level-0 and reused;
             for Zarr v2, if omitted, a legacy per-level policy may be applied
             when axes are TCZYX.
-        shard_factor : Optional[Tuple[int, ...]]
-            Optional shard factor per axis (v3 only); ignored for v2.
+        shard_shape : Optional[List[Tuple[int, ...]]]
+            **Zarr v3 only.** Per-level shard shape (one tuple per level).
+            Length must equal the number of pyramid levels; each tuple length
+            must equal ``ndim``. Ignored for Zarr v2.
         compressor : Optional[BloscCodec | numcodecs.abc.Codec]
             Compression codec. For v2 use ``numcodecs.Blosc``; for v3 use
             ``zarr.codecs.BloscCodec``.
@@ -177,8 +179,8 @@ class OMEZarrWriter:
 
         # 5) formatting and compression
         self.zarr_format = zarr_format
-        self.shard_factor = shard_factor
         self.compressor = compressor
+        self.shard_shape = shard_shape
 
         # 6) Metadata fields
         self.image_name = image_name or "Image"
@@ -192,6 +194,24 @@ class OMEZarrWriter:
         self.datasets: List[zarr.Array]
         self._initialized: bool = False
         self._metadata_written: bool = False
+
+        # 9) Validate shard_shape (after num_levels is known)
+
+        if self.shard_shape is not None:
+            if len(self.shard_shape) != self.num_levels:
+                raise ValueError(
+                    f"shard_shape must provide one tuple per level "
+                    f"(expected {self.num_levels}, got {len(self.shard_shape)})"
+                )
+            for idx, ss in enumerate(self.shard_shape):
+                if len(ss) != self.ndim:
+                    raise ValueError(
+                        f"shard_shape[{idx}] length {len(ss)} != ndim {self.ndim}"
+                    )
+                if not all(int(v) >= 1 for v in ss):
+                    raise ValueError(
+                        f"shard_shape[{idx}] must contain positive integers: {ss}"
+                    )
 
     # -----------------
     # Public interface
@@ -409,10 +429,10 @@ class OMEZarrWriter:
                         "separator": "/",
                     },
                 }
-                if self.shard_factor is not None:
-                    kwargs["shards"] = tuple(
-                        c * f for c, f in zip(chunks_lvl, self.shard_factor)
-                    )
+                # Use the per-level shard shape if provided
+                if self.shard_shape is not None:
+                    kwargs["shards"] = tuple(int(x) for x in self.shard_shape[lvl])
+
                 arr = self.root.create_array(**kwargs)
                 self.datasets.append(arr)
 
