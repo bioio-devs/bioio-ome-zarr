@@ -223,41 +223,6 @@ class OMEZarrWriter:
                 self._downsample_and_write_batch_t(ti, start_t, end_t)
         log.info("Finished loop over T")
 
-    def write_t_batches_image_sequence(
-        self,
-        paths: List[str],
-        channels: List[int] = [],
-        tbatch: int = 4,
-        debug: bool = False,
-    ) -> None:
-        """
-        Write the image in batches of T.
-
-        Parameters
-        ----------
-        paths:
-            The list of file paths, one path per T.
-        tbatch:
-            The number of T to write at a time.
-        """
-        # loop over T in batches
-        numT = len(paths)
-        if debug:
-            numT = np.min([5, numT])
-        log.info("Starting loop over T")
-        for i in np.arange(0, numT + 1, tbatch):
-            start_t = i
-            end_t = min(i + tbatch, numT)
-            if end_t > start_t:
-                # read batch into dask array
-                ti = []
-                for j in range(start_t, end_t):
-                    im = Reader(paths[j])
-                    ti.append(im.get_image_dask_data("CZYX", C=channels))
-                ti = da.stack(ti, axis=0)
-                self._downsample_and_write_batch_t(ti, start_t, end_t)
-        log.info("Finished loop over T")
-
     def write_t_batches_array(
         self,
         im: Union[da.Array, np.ndarray],
