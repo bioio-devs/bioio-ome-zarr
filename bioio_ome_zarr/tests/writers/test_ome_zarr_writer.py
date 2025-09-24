@@ -315,15 +315,15 @@ def test_write_timepoints_array(
 @pytest.mark.parametrize(
     "shape, chunk_size, shard_shape",
     [
-        # 2D YX, shard 2x2
+        # 2D YX, 4x4 chunk, 4x4 shard
         ((16, 16), (4, 4), [(4, 4)]),
-        # 3D TYX, shard 1x2x2
+        # 3D TYX, 1x4x4 chunk, 1x8x8 shard
         ((2, 16, 16), (1, 4, 4), [(1, 8, 8)]),
-        # 4D CZYX, shard 1x1x2x2
+        # 4D CZYX, 1x1x4x4 chunk, 2x2x16x16 shard
         ((2, 2, 16, 16), (1, 1, 4, 4), [(2, 2, 16, 16)]),
-        # 4D TZYX, shard 1x1x2x2
+        # 4D TZYX, 1x1x4x4 chunk, 1x2x16x16 shard
         ((3, 2, 16, 16), (1, 1, 4, 4), [(1, 2, 16, 16)]),
-        # 5D TCZYX, shard 1x1x1x2x2
+        # 5D TCZYX, 1x1x1x4x4 chunk, 2x2x2x16x16 shard
         ((2, 2, 2, 16, 16), (1, 1, 1, 4, 4), [(2, 2, 2, 16, 16)]),
     ],
 )
