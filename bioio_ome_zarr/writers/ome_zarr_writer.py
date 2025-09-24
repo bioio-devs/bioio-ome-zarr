@@ -14,62 +14,141 @@ from .utils import (
     resize,
 )
 
+# ---------------------
+# Type aliases
+# ---------------------
 DimSeq = Sequence[int]
 PerLevelDimSeq = Sequence[DimSeq]
-MultiresolutionShapeSpec = Union[DimSeq, PerLevelDimSeq]
+MultiResolutionShapeSpec = Union[DimSeq, PerLevelDimSeq]
+
+# ---------------------
+# Helpers
+# ---------------------
 
 
 def _normalize_levelwise(
-    spec: MultiresolutionShapeSpec,
+    spec: MultiResolutionShapeSpec,
     *,
     num_levels: int,
     ndim: int,
     label: str,
 ) -> List[Tuple[int, ...]]:
-    """Normalize a single N-dim sequence or a per-level sequence of
-    N-dim sequences into a per-level List[Tuple[int, ...]] with validation.
+    """Normalize a single N-dim shape or per-level list of N-dim shapes into a
+    per-level List[Tuple[int, ...]] with structural validation.
+
+    Structural checks only:
+      - non-empty
+      - detect single-shape vs per-level
+      - per-level count equals `num_levels`
+      - each shape length equals `ndim`
     """
     if len(spec) == 0:
         raise ValueError(f"{label} cannot be empty")
 
-    # Single-spec case: the first element is an int → treat spec as Sequence[int]
+    # Single-shape case: replicate across levels
     if isinstance(spec[0], (int, np.integer)):
-        single = cast(DimSeq, spec)
-        if len(single) != ndim:
-            raise ValueError(f"{label} length {len(single)} != ndim {ndim}")
-        return [tuple(int(v) for v in single)] * num_levels
+        single_shape = cast(DimSeq, spec)
+        if len(single_shape) != ndim:
+            raise ValueError(f"{label} length {len(single_shape)} != ndim {ndim}")
+        return [tuple(int(v) for v in single_shape)] * num_levels
 
-    # Per-level case: spec is Sequence[Sequence[int]]
-    per_level = cast(PerLevelDimSeq, spec)
-    if len(per_level) != num_levels:
+    # Per-level case
+    per_level_shapes = cast(PerLevelDimSeq, spec)
+    if len(per_level_shapes) != num_levels:
         raise ValueError(
-            f"{label} must have {num_levels} entries (per level), got {len(per_level)}"
+            f"{label} must have {num_levels} entries (per level), got "
+            f"{len(per_level_shapes)}"
         )
-    out: List[Tuple[int, ...]] = []
-    for index, level in enumerate(per_level):
-        if len(level) != ndim:
-            raise ValueError(f"{label}[{index}] length {len(level)} != ndim {ndim}")
-        out.append(tuple(int(v) for v in level))
-    return out
+    normalized: List[Tuple[int, ...]] = []
+    for level_index, per_level_shape in enumerate(per_level_shapes):
+        if len(per_level_shape) != ndim:
+            raise ValueError(
+                f"{label}[{level_index}] length {len(per_level_shape)} != "
+                f"ndim {ndim}"
+            )
+        normalized.append(tuple(int(v) for v in per_level_shape))
+    return normalized
+
+
+def _validate_shapes(
+    *,
+    level_shapes: List[Tuple[int, ...]],
+    chunk_shapes_per_level: List[Tuple[int, ...]],
+    shards_per_level: Optional[List[Tuple[int, ...]]],
+    zarr_format: Literal[2, 3],
+) -> None:
+    """Unified structural validation for chunks and shards.
+
+    Rules:
+      - All: per-level counts must match `level_shapes`; ndim must match.
+      - Chunks: each dim >= 1 (chunks may exceed level dims; allowed by Zarr).
+      - Shards (v3 only): provided? each dim >= 1 AND multiple of chunk dim.
+                          No requirement that shards ≤ level dims or tile.
+      - Shards (v2): forbidden.
+    """
+    num_levels = len(level_shapes)
+    if num_levels == 0:
+        raise ValueError("level_shapes cannot be empty")
+    ndim = len(level_shapes[0])
+
+    def _expect_len(label: str, seq: List[Tuple[int, ...]], n: int) -> None:
+        if len(seq) != n:
+            raise ValueError(
+                f"{label} must have {n} entries (per level), got {len(seq)}"
+            )
+
+    def _expect_ndim(label: str, shp: Tuple[int, ...], lvl: int) -> None:
+        if len(shp) != ndim:
+            raise ValueError(f"{label}[{lvl}] length {len(shp)} != ndim {ndim}")
+
+    def _expect_pos(label: str, val: int, lvl: int, dim: int) -> None:
+        if int(val) < 1:
+            raise ValueError(f"{label}[{lvl}][{dim}] must be >= 1")
+
+    # ---- chunks ----
+    _expect_len("chunk_shape", chunk_shapes_per_level, num_levels)
+    for lvl, cshp in enumerate(chunk_shapes_per_level):
+        _expect_ndim("chunk_shape", cshp, lvl)
+        for dim, c in enumerate(cshp):
+            _expect_pos("chunk_shape", c, lvl, dim)
+
+    # ---- shards ----
+    if shards_per_level is not None:
+        if zarr_format == 2:
+            raise ValueError("shard_shape is not supported for Zarr v2.")
+        _expect_len("shard_shape", shards_per_level, num_levels)
+        for lvl, sshp in enumerate(shards_per_level):
+            _expect_ndim("shard_shape", sshp, lvl)
+            cshp = chunk_shapes_per_level[lvl]
+            for dim, (s, c) in enumerate(zip(sshp, cshp)):
+                _expect_pos("shard_shape", s, lvl, dim)
+                if int(s) % int(c) != 0:
+                    raise ValueError(
+                        f"shard_shape[{lvl}][{dim}] (= {int(s)}) must be a "
+                        f"multiple of chunk_dim {int(c)}"
+                    )
+
+
+# ---------------------
+# Writer
+# ---------------------
 
 
 class OMEZarrWriter:
     """
-    OMEZarrWriter is a unified OME-Zarr writer that targets either Zarr v2
-    (NGFF 0.4) or Zarr v3 (NGFF 0.5) with the same public API. Supports
-    2 ≤ N ≤ 5 dimensions (e.g., YX, ZYX, TYX, CZYX, or TCZYX) and writes a
-    multiscale pyramid with nearest-neighbor downsampling.
+    Unified OME-Zarr writer targeting Zarr v2 (NGFF 0.4) or v3 (NGFF 0.5).
+    Supports 2–5D arrays (e.g., YX, ZYX, TYX, CZYX, TCZYX) and writes a
+    multiscale pyramid exactly as specified by explicit per-level shapes.
     """
 
     def __init__(
         self,
         store: Union[str, zarr.storage.StoreLike],
-        shape: Sequence[int],
+        level_shapes: MultiResolutionShapeSpec,
         dtype: Union[np.dtype, str],
         *,
-        scale: Optional[Sequence[Sequence[float]]] = None,
-        chunk_shape: Optional[MultiresolutionShapeSpec] = None,
-        shard_shape: Optional[MultiresolutionShapeSpec] = None,
+        chunk_shape: Optional[MultiResolutionShapeSpec] = None,
+        shard_shape: Optional[MultiResolutionShapeSpec] = None,
         compressor: Optional[Union[BloscCodec, numcodecs.abc.Codec]] = None,
         zarr_format: Literal[2, 3] = 3,
         image_name: Optional[str] = "Image",
@@ -91,15 +170,10 @@ class OMEZarrWriter:
         ----------
         store : Union[str, zarr.storage.StoreLike]
             Filesystem path, URL (via fsspec), or Store-like for the root group.
-        shape : Sequence[int]
-            Level-0 image shape (e.g., (T,C,Z,Y,X)).
+        level_shapes : Sequence[int] | Sequence[Sequence[int]]
+            Level-0 shape or explicit per-level shapes (level 0 first).
         dtype : Union[np.dtype, str]
             NumPy dtype for the on-disk array.
-        scale : Optional[Sequence[Sequence[float]]]
-            Per-level, per-axis *relative size* vs. level-0. For example,
-            ``[(1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25)]`` writes two extra
-            levels at 1/2 and 1/4 resolution on spatial axes. If ``None``,
-            only level-0 is written.
         chunk_shape : Optional[Union[Sequence[int], Sequence[Sequence[int]]]]
             Either a single chunk shape (applied to all levels),
             e.g. ``(1,1,16,256,256)``, or per-level chunk shapes,
@@ -111,7 +185,6 @@ class OMEZarrWriter:
             **Zarr v3 only.** Either:
               - a single N-dim sequence applied to all levels, or
               - a per-level sequence of N-dim sequences.
-            Ignored for Zarr v2.
         compressor : Optional[BloscCodec | numcodecs.abc.Codec]
             Compression codec. For v2 use ``numcodecs.Blosc``; for v3 use
             ``zarr.codecs.BloscCodec``.
@@ -136,13 +209,39 @@ class OMEZarrWriter:
         physical_pixel_size : Optional[List[float]]
             Physical scale at level 0 for each axis.
         """
-        # 1) Store fundamental properties
-        self.store = store
-        self.shape = tuple(int(x) for x in shape)
-        self.dtype = np.dtype(dtype)
-        self.ndim = len(self.shape)
+        if len(level_shapes) == 0:
+            raise ValueError("level_shapes cannot be empty")
 
-        # 2) Build an Axes instance
+        self.store = store
+        self.dtype = np.dtype(dtype)
+
+        if isinstance(level_shapes[0], (int, np.integer)):
+            inferred_ndim = len(cast(DimSeq, level_shapes))
+            inferred_levels = 1
+        else:
+            inferred_ndim = len(cast(PerLevelDimSeq, level_shapes)[0])
+            inferred_levels = len(cast(PerLevelDimSeq, level_shapes))
+
+        # Normalize and clamp level dims to >= 1
+        self.level_shapes = _normalize_levelwise(
+            level_shapes,
+            num_levels=inferred_levels,
+            ndim=inferred_ndim,
+            label="level_shapes",
+        )
+        self.level_shapes = [
+            tuple(max(1, int(dim)) for dim in shape) for shape in self.level_shapes
+        ]
+
+        self.shape = tuple(self.level_shapes[0])
+        self.ndim = len(self.shape)
+        self.num_levels = len(self.level_shapes)
+
+        # Axes
+        if axes_names is not None and len(axes_names) != self.ndim:
+            raise ValueError(
+                f"axes_names length {len(axes_names)} must match ndim {self.ndim}"
+            )
         self.axes = Axes(
             ndim=self.ndim,
             names=axes_names,
@@ -151,35 +250,19 @@ class OMEZarrWriter:
             scales=physical_pixel_size,
             factors=tuple(1 for _ in range(self.ndim)),
         )
+        self._axes_lower: Tuple[str, ...] = tuple(n.lower() for n in self.axes.names)
 
-        # 3) Compute all pyramid level shapes from `scale`
-        self.level_shapes: List[Tuple[int, ...]] = [tuple(self.shape)]
-        self.dataset_scales: List[List[float]] = []
+        # Relative scales written to NGFF metadata (vs level 0)
+        self.dataset_scales: List[List[float]] = [
+            (
+                np.array(shape, dtype=float)
+                / np.array(self.level_shapes[0], dtype=float)
+            ).tolist()
+            for shape in self.level_shapes[1:]
+        ]
 
-        if scale is not None:
-            # Normalize to List[List[float]] and validate lengths
-            scales_list: List[List[float]] = [list(map(float, s)) for s in scale]
-            for level_scale in scales_list:
-                if len(level_scale) != self.ndim:
-                    raise ValueError(
-                        f"Each scale tuple must have length {self.ndim}; "
-                        f"got {len(level_scale)}"
-                    )
-            self.dataset_scales = scales_list
-            for vec in self.dataset_scales:
-                next_shape = tuple(
-                    max(1, int(np.floor(self.shape[i] * vec[i])))
-                    for i in range(self.ndim)
-                )
-                if next_shape == self.level_shapes[-1]:
-                    continue
-                self.level_shapes.append(next_shape)
-
-        self.num_levels = len(self.level_shapes)
-
-        # 4) Determine per-level chunk shapes
+        # Chunk shapes (explicit or suggested ~16 MiB).
         self._chunk_shape_explicit: bool = chunk_shape is not None
-        self.chunk_shapes_per_level: List[Tuple[int, ...]]
         if chunk_shape is not None:
             self.chunk_shapes_per_level = _normalize_levelwise(
                 chunk_shape,
@@ -189,15 +272,20 @@ class OMEZarrWriter:
             )
         else:
             suggested = chunk_size_from_memory_target(
-                self.level_shapes[0], self.dtype, 16 << 20
+                self.level_shapes[0],
+                self.dtype,
+                16 << 20,
             )
-            self.chunk_shapes_per_level = [suggested for _ in range(self.num_levels)]
+            self.chunk_shapes_per_level = [
+                tuple(max(1, min(int(s), int(d))) for s, d in zip(suggested, shape))
+                for shape in self.level_shapes
+            ]
 
-        # 5) formatting and compression
+        # Format & compressor
         self.zarr_format = zarr_format
         self.compressor = compressor
 
-        # Sharding (v3 only): normalize to per-level tuples
+        # Shards (v3 only): normalize per-level
         self.shards_per_level: Optional[List[Tuple[int, ...]]] = None
         if shard_shape is not None:
             self.shards_per_level = _normalize_levelwise(
@@ -207,14 +295,22 @@ class OMEZarrWriter:
                 label="shard_shape",
             )
 
-        # 6) Metadata fields
+        # Validate level/chunk/shard shapes
+        _validate_shapes(
+            level_shapes=self.level_shapes,
+            chunk_shapes_per_level=self.chunk_shapes_per_level,
+            shards_per_level=self.shards_per_level,
+            zarr_format=self.zarr_format,
+        )
+
+        # Metadata fields
         self.image_name = image_name or "Image"
         self.channels = channels
         self.rdefs = rdefs
         self.creator_info = creator_info
         self.root_transform = root_transform
 
-        # 8) Handles & state
+        # Handles & state
         self.root: Optional[zarr.Group]
         self.datasets: List[zarr.Array]
         self._initialized: bool = False
@@ -225,7 +321,7 @@ class OMEZarrWriter:
     # -----------------
     def preview_metadata(self) -> Dict[str, Any]:
         """
-        Build and return the exact NGFF metadata dict(s) this writer will
+        Build and return NGFF metadata dict(s) this writer will
         persist. Safe to call before initializing the store; uses in-memory
         config/state.
         """
@@ -267,12 +363,12 @@ class OMEZarrWriter:
         )
 
         # Store each level (downsampled with nearest-neighbor for parity)
-        for lvl, shape in enumerate(self.level_shapes):
-            src = base if lvl == 0 else resize(base, shape, order=0)
+        for level_index, level_shape in enumerate(self.level_shapes):
+            src = base if level_index == 0 else resize(base, level_shape, order=0)
             if self.zarr_format == 2:
-                da.to_zarr(src, self.datasets[lvl])
+                da.to_zarr(src, self.datasets[level_index])
             else:
-                da.store(src, self.datasets[lvl], lock=True)
+                da.store(src, self.datasets[level_index], lock=True)
 
     def write_timepoints(
         self,
@@ -304,7 +400,6 @@ class OMEZarrWriter:
         if not self._initialized:
             self._initialize()
 
-        # Ensure valid dims
         writer_axes = [a.lower() for a in self.axes.names]
         if "t" not in writer_axes:
             raise ValueError("write_timepoints() requires a 'T' axis.")
@@ -324,12 +419,11 @@ class OMEZarrWriter:
 
         src_avail = src_T - start_T_src
         dst_avail = dst_T - start_T_dest
-
-        # Infer or bound total_T
-        if total_T is None:
-            total_T = min(src_avail, dst_avail)
-        else:
-            total_T = max(0, min(int(total_T), src_avail, dst_avail))
+        total_T = (
+            min(src_avail, dst_avail)
+            if total_T is None
+            else max(0, min(int(total_T), src_avail, dst_avail))
+        )
         if total_T == 0:
             return
 
@@ -344,23 +438,30 @@ class OMEZarrWriter:
             for i in range(self.ndim)
         )
 
-        # Per-level processing
-        for lvl in range(self.num_levels):
-            if lvl == 0:
+        for level_index in range(self.num_levels):
+            if level_index == 0:
                 level_block = batch_arr
             else:
-                nextshape = list(self.level_shapes[lvl])
+                nextshape = list(self.level_shapes[level_index])
                 nextshape[axis_t] = total_T
-                level_block = resize(batch_arr, tuple(nextshape), order=0).astype(
-                    batch_arr.dtype
-                )
+                level_block = resize(
+                    batch_arr,
+                    tuple(nextshape),
+                    order=0,
+                ).astype(batch_arr.dtype)
 
-            # Dispatch write depending on Zarr format
             if self.zarr_format == 2:
-                da.to_zarr(level_block, self.datasets[lvl], region=region_tuple)
+                da.to_zarr(
+                    level_block,
+                    self.datasets[level_index],
+                    region=region_tuple,
+                )
             else:
                 da.store(
-                    level_block, self.datasets[lvl], regions=region_tuple, lock=True
+                    level_block,
+                    self.datasets[level_index],
+                    regions=region_tuple,
+                    lock=True,
                 )
 
     # -----------------
@@ -397,23 +498,23 @@ class OMEZarrWriter:
             if not self._chunk_shape_explicit:
                 # If 5D TCZYX, use legacy z-slice per-level chunking; otherwise
                 # keep the suggested per-level chunking already prepared.
-                is_tczyx = self.ndim == 5 and [n.lower() for n in self.axes.names] == [
+                is_tczyx = self.ndim == 5 and self._axes_lower == (
                     "t",
                     "c",
                     "z",
                     "y",
                     "x",
-                ]
+                )
                 if is_tczyx:
                     self.chunk_shapes_per_level = compute_level_chunk_sizes_zslice(
                         self.level_shapes
                     )
 
-            for lvl, shape in enumerate(self.level_shapes):
-                chunks_lvl = self.chunk_shapes_per_level[lvl]
+            for level_index, level_shape in enumerate(self.level_shapes):
+                chunks_lvl = self.chunk_shapes_per_level[level_index]
                 arr = self.root.zeros(
-                    name=str(lvl),
-                    shape=shape,
+                    name=str(level_index),
+                    shape=level_shape,
                     chunks=chunks_lvl,
                     dtype=self.dtype,
                     compressor=compressor,
@@ -423,11 +524,11 @@ class OMEZarrWriter:
                 self.datasets.append(arr)
         else:
             # v3
-            for lvl, shape in enumerate(self.level_shapes):
-                chunks_lvl = self.chunk_shapes_per_level[lvl]
+            for level_index, level_shape in enumerate(self.level_shapes):
+                chunks_lvl = self.chunk_shapes_per_level[level_index]
                 kwargs: Dict[str, Any] = {
-                    "name": str(lvl),
-                    "shape": shape,
+                    "name": str(level_index),
+                    "shape": level_shape,
                     "chunks": chunks_lvl,
                     "dtype": self.dtype,
                     "compressors": compressor,
@@ -436,17 +537,16 @@ class OMEZarrWriter:
                         "separator": "/",
                     },
                 }
-                # Per-level shards if provided (Zarr v3 only)
                 if self.shards_per_level is not None:
-                    kwargs["shards"] = tuple(int(x) for x in self.shards_per_level[lvl])
+                    kwargs["shards"] = tuple(
+                        int(x) for x in self.shards_per_level[level_index]
+                    )
 
                 arr = self.root.create_array(**kwargs)
                 self.datasets.append(arr)
 
-        # Write metadata
         self._write_metadata()
         self._metadata_written = True
-
         self._initialized = True
 
     def _open_root(self) -> zarr.Group:
@@ -454,8 +554,16 @@ class OMEZarrWriter:
         if isinstance(self.store, str):
             if "://" in self.store:
                 fs = zarr.storage.FsspecStore(self.store, mode="w")
-                return zarr.open_group(store=fs, mode="w", zarr_format=self.zarr_format)
-            return zarr.open_group(self.store, mode="w", zarr_format=self.zarr_format)
+                return zarr.open_group(
+                    store=fs,
+                    mode="w",
+                    zarr_format=self.zarr_format,
+                )
+            return zarr.open_group(
+                self.store,
+                mode="w",
+                zarr_format=self.zarr_format,
+            )
         return zarr.group(
             store=self.store,
             overwrite=True,
@@ -470,6 +578,6 @@ class OMEZarrWriter:
         md = self.preview_metadata()
         if self.zarr_format == 2:
             self.root.attrs["multiscales"] = md["multiscales"]
-            self.root.attrs["omero"] = md["omero"]
+            self.root.attrs["omero"] = md.get("omero")
         else:
             self.root.attrs.update({"ome": md["ome"]})
