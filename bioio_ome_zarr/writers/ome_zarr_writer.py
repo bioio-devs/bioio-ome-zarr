@@ -46,10 +46,10 @@ def _normalize_levelwise(
             f"{label} must have {num_levels} entries (per level), got {len(per_level)}"
         )
     out: List[Tuple[int, ...]] = []
-    for i, inner in enumerate(per_level):
-        if len(inner) != ndim:
-            raise ValueError(f"{label}[{i}] length {len(inner)} != ndim {ndim}")
-        out.append(tuple(int(v) for v in inner))
+    for index, level in enumerate(per_level):
+        if len(level) != ndim:
+            raise ValueError(f"{label}[{index}] length {len(level)} != ndim {ndim}")
+        out.append(tuple(int(v) for v in level))
     return out
 
 
