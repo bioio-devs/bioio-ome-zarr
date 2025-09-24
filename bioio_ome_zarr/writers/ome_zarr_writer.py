@@ -1,5 +1,4 @@
-from collections.abc import Iterable
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import dask.array as da
 import numcodecs
@@ -15,50 +14,42 @@ from .utils import (
     resize,
 )
 
-DimSpec = Iterable[int]
-LevelwiseSpec = Union[DimSpec, Iterable[DimSpec]]
-
-FloatDimSpec = Iterable[float]
-PerLevelFloatSpec = Iterable[FloatDimSpec]
+DimSeq = Sequence[int]
+PerLevelDimSeq = Sequence[DimSeq]
+MultiresolutionShapeSpec = Union[DimSeq, PerLevelDimSeq]
 
 
 def _normalize_levelwise(
-    spec: LevelwiseSpec,
+    spec: MultiresolutionShapeSpec,
     *,
     num_levels: int,
     ndim: int,
     label: str,
 ) -> List[Tuple[int, ...]]:
+    """Normalize a single N-dim sequence or a per-level sequence of
+    N-dim sequences into a per-level List[Tuple[int, ...]] with validation.
     """
-    Convert a single N-dim iterable (applied to all levels) or a per-level iterable
-    of N-dim iterables into a per-level List[Tuple[int, ...]] with validation.
-    Accepts lists, tuples, or generators.
-    """
-    top: List[Any] = list(cast(Iterable[Any], spec))
-    if not top:
+    if len(spec) == 0:
         raise ValueError(f"{label} cannot be empty")
 
-    # Case 1: single N-dim iterable of ints → broadcast
-    if all(isinstance(x, (int, np.integer)) for x in top):
-        single = tuple(int(cast(Any, x)) for x in top)
+    # Single-spec case: the first element is an int → treat spec as Sequence[int]
+    if isinstance(spec[0], (int, np.integer)):
+        single = cast(DimSeq, spec)
         if len(single) != ndim:
             raise ValueError(f"{label} length {len(single)} != ndim {ndim}")
-        return [single] * num_levels
+        return [tuple(int(v) for v in single)] * num_levels
 
-    # Case 2: per-level iterable → validate each inner iterable
-    out: List[Tuple[int, ...]] = []
-    for i, inner in enumerate(top):
-        try:
-            tup = tuple(int(v) for v in cast(Iterable[Any], inner))
-        except TypeError as e:
-            raise TypeError(f"{label}[{i}] must be an iterable of ints") from e
-        if len(tup) != ndim:
-            raise ValueError(f"{label}[{i}] length {len(tup)} != ndim {ndim}")
-        out.append(tup)
-    if len(out) != num_levels:
+    # Per-level case: spec is Sequence[Sequence[int]]
+    per_level = cast(PerLevelDimSeq, spec)
+    if len(per_level) != num_levels:
         raise ValueError(
-            f"{label} must have {num_levels} entries (per level), got {len(out)}"
+            f"{label} must have {num_levels} entries (per level), got {len(per_level)}"
         )
+    out: List[Tuple[int, ...]] = []
+    for i, inner in enumerate(per_level):
+        if len(inner) != ndim:
+            raise ValueError(f"{label}[{i}] length {len(inner)} != ndim {ndim}")
+        out.append(tuple(int(v) for v in inner))
     return out
 
 
@@ -73,12 +64,12 @@ class OMEZarrWriter:
     def __init__(
         self,
         store: Union[str, zarr.storage.StoreLike],
-        shape: Iterable[int],
+        shape: Sequence[int],
         dtype: Union[np.dtype, str],
         *,
-        scale: Optional[PerLevelFloatSpec] = None,
-        chunk_shape: Optional[LevelwiseSpec] = None,
-        shard_shape: Optional[LevelwiseSpec] = None,
+        scale: Optional[Sequence[Sequence[float]]] = None,
+        chunk_shape: Optional[MultiresolutionShapeSpec] = None,
+        shard_shape: Optional[MultiresolutionShapeSpec] = None,
         compressor: Optional[Union[BloscCodec, numcodecs.abc.Codec]] = None,
         zarr_format: Literal[2, 3] = 3,
         image_name: Optional[str] = "Image",
@@ -100,26 +91,26 @@ class OMEZarrWriter:
         ----------
         store : Union[str, zarr.storage.StoreLike]
             Filesystem path, URL (via fsspec), or Store-like for the root group.
-        shape : Iterable[int]
+        shape : Sequence[int]
             Level-0 image shape (e.g., (T,C,Z,Y,X)).
         dtype : Union[np.dtype, str]
             NumPy dtype for the on-disk array.
-        scale : Optional[Iterable[Iterable[float]]]
+        scale : Optional[Sequence[Sequence[float]]]
             Per-level, per-axis *relative size* vs. level-0. For example,
             ``[(1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25)]`` writes two extra
             levels at 1/2 and 1/4 resolution on spatial axes. If ``None``,
             only level-0 is written.
-        chunk_shape : Optional[Union[Iterable[int], Iterable[Iterable[int]]]]
+        chunk_shape : Optional[Union[Sequence[int], Sequence[Sequence[int]]]]
             Either a single chunk shape (applied to all levels),
             e.g. ``(1,1,16,256,256)``, or per-level chunk shapes,
             e.g. ``[(1,1,16,256,256), (1,1,16,128,128), ...]``. If ``None``,
             a suggested ≈16 MiB chunk is derived from level-0 and reused;
             for Zarr v2, if omitted, a legacy per-level policy may be applied
             when axes are TCZYX.
-        shard_shape : Optional[Union[Iterable[int], Iterable[Iterable[int]]]]
+        shard_shape : Optional[Union[Sequence[int], Sequence[Sequence[int]]]]
             **Zarr v3 only.** Either:
-              - a single N-dim iterable applied to all levels, or
-              - a per-level iterable of N-dim iterables.
+              - a single N-dim sequence applied to all levels, or
+              - a per-level sequence of N-dim sequences.
             Ignored for Zarr v2.
         compressor : Optional[BloscCodec | numcodecs.abc.Codec]
             Compression codec. For v2 use ``numcodecs.Blosc``; for v3 use
