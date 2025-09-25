@@ -42,6 +42,10 @@ def _normalize_levelwise(
       - per-level count equals `num_levels`
       - each shape length equals `ndim`
       - each dim >= 1
+
+    * Note: when normalizing level_shapes, the length will not change
+    only for shard_shape and chunk_shape where we bring them up to the length
+    of level_shapes.
     """
     if len(spec) == 0:
         raise ValueError(f"{label} cannot be empty")
@@ -90,9 +94,7 @@ def _validate_shapes(
 
     Rules:
       - All: per-level counts must match `level_shapes`; ndim must match.
-      - Chunks: positivity guaranteed by normalization.
       - Shards (v3 only): each shard dim must be a multiple of its chunk dim.
-        No requirement that shards ≤ level dims or tile the level.
       - Shards (v2): forbidden.
     """
     level_count = len(level_shapes)
