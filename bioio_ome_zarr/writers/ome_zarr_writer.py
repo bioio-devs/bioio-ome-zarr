@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
 import numcodecs
@@ -9,22 +9,18 @@ from zarr.codecs import BloscCodec, BloscShuffle
 
 from .metadata import Axes, Channel, MetadataParams, build_ngff_metadata
 from .utils import (
+    DimSeq,
+    PerLevelDimSeq,
     multiscale_chunk_size_from_memory_target,
     resize,
 )
 
-# ---------------------
-# Type aliases
-# ---------------------
-DimSeq = Sequence[int]
-PerLevelDimSeq = Sequence[DimSeq]
 MultiResolutionShapeSpec = Union[DimSeq, PerLevelDimSeq]
+
 
 # ---------------------
 # Helpers
 # ---------------------
-
-
 def _normalize_levelwise(
     spec: MultiResolutionShapeSpec,
     *,
@@ -54,7 +50,7 @@ def _normalize_levelwise(
         single_shape = cast(DimSeq, spec)
         if len(single_shape) != ndim:
             raise ValueError(f"{label} length {len(single_shape)} != ndim {ndim}")
-        single_tuple = tuple(int(v) for v in single_shape)
+        single_tuple = tuple(dim for dim in single_shape)
         for axis_index, value in enumerate(single_tuple):
             if value < 1:
                 raise ValueError(f"{label}[{axis_index}] must be >= 1")
@@ -74,7 +70,7 @@ def _normalize_levelwise(
                 f"{label}[{level_index}] length {len(per_level_shape)} != "
                 f"ndim {ndim}"
             )
-        level_tuple = tuple(int(v) for v in per_level_shape)
+        level_tuple = tuple(dim for dim in per_level_shape)
         for axis_index, value in enumerate(level_tuple):
             if value < 1:
                 raise ValueError(f"{label}[{level_index}][{axis_index}] must be >= 1")
@@ -136,11 +132,11 @@ def _validate_shapes(
             for axis_index, (shard_dim, chunk_dim) in enumerate(
                 zip(shard_shape_level, chunk_shape_level)
             ):
-                if int(shard_dim) % int(chunk_dim) != 0:
+                if shard_dim % chunk_dim != 0:
                     raise ValueError(
                         f"shard_shape[{level_index}][{axis_index}] (= "
-                        f"{int(shard_dim)}) must be a multiple of chunk_dim "
-                        f"{int(chunk_dim)}"
+                        f"{shard_dim}) must be a multiple of chunk_dim "
+                        f"{chunk_dim}"
                     )
 
 
@@ -280,14 +276,15 @@ class OMEZarrWriter:
                 label="chunk_shape",
             )
         else:
-            computed: List[Sequence[int]] = multiscale_chunk_size_from_memory_target(
+            computed_chunk_shapes = multiscale_chunk_size_from_memory_target(
                 self.level_shapes,
                 str(self.dtype),
                 16 << 20,  # ~16 MiB target
             )
             # normalize to List[Tuple[int, ...]]
             self.chunk_shapes_per_level = [
-                tuple(int(v) for v in seq) for seq in computed
+                tuple(chunk_dim for chunk_dim in single_chunk)
+                for single_chunk in computed_chunk_shapes
             ]
 
         # Format & compressor

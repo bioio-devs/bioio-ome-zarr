@@ -15,6 +15,8 @@ from bioio_ome_zarr.reader import Reader
 
 DimSeq = Sequence[int]
 PerLevelDimSeq = Sequence[DimSeq]
+
+# LEGACY (Remove with V2 writer)
 DimTuple = Tuple[int, ...]
 
 
