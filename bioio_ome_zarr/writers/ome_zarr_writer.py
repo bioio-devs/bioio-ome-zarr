@@ -263,7 +263,6 @@ class OMEZarrWriter:
             scales=physical_pixel_size,
             factors=tuple(1 for _ in range(self.ndim)),
         )
-        self._axes_lower: Tuple[str, ...] = tuple(n.lower() for n in self.axes.names)
 
         # Relative scales written to NGFF metadata (vs level 0)
         self.dataset_scales: List[List[float]] = [
@@ -511,13 +510,13 @@ class OMEZarrWriter:
             if not self._chunk_shape_explicit:
                 # If 5D TCZYX, use legacy z-slice per-level chunking; otherwise
                 # keep the suggested per-level chunking already prepared.
-                is_tczyx = self.ndim == 5 and self._axes_lower == (
+                is_tczyx = self.ndim == 5 and [n.lower() for n in self.axes.names] == [
                     "t",
                     "c",
                     "z",
                     "y",
                     "x",
-                )
+                ]
                 if is_tczyx:
                     self.chunk_shapes_per_level = compute_level_chunk_sizes_zslice(
                         self.level_shapes
@@ -550,6 +549,7 @@ class OMEZarrWriter:
                         "separator": "/",
                     },
                 }
+                # Per-level shards if provided (Zarr v3 only)
                 if self.shards_per_level is not None:
                     kwargs["shards"] = tuple(
                         int(x) for x in self.shards_per_level[level_index]
@@ -558,8 +558,10 @@ class OMEZarrWriter:
                 arr = self.root.create_array(**kwargs)
                 self.datasets.append(arr)
 
+        # Write metadata
         self._write_metadata()
         self._metadata_written = True
+
         self._initialized = True
 
     def _open_root(self) -> zarr.Group:
@@ -567,21 +569,8 @@ class OMEZarrWriter:
         if isinstance(self.store, str):
             if "://" in self.store:
                 fs = zarr.storage.FsspecStore(self.store, mode="w")
-                return zarr.open_group(
-                    store=fs,
-                    mode="w",
-                    zarr_format=self.zarr_format,
-                )
-            return zarr.open_group(
-                self.store,
-                mode="w",
-                zarr_format=self.zarr_format,
-            )
-        return zarr.group(
-            store=self.store,
-            overwrite=True,
-            zarr_format=self.zarr_format,
-        )
+                return zarr.open_group(store=fs, mode="w", zarr_format=self.zarr_format)
+            return zarr.open_group(self.store, mode="w", zarr_format=self.zarr_format)
 
     def _write_metadata(self) -> None:
         """Persist NGFF metadata to the opened root group."""
@@ -591,6 +580,6 @@ class OMEZarrWriter:
         md = self.preview_metadata()
         if self.zarr_format == 2:
             self.root.attrs["multiscales"] = md["multiscales"]
-            self.root.attrs["omero"] = md.get("omero")
+            self.root.attrs["omero"] = md["omero"]
         else:
             self.root.attrs.update({"ome": md["ome"]})
