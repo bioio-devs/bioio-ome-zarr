@@ -571,6 +571,11 @@ class OMEZarrWriter:
                 fs = zarr.storage.FsspecStore(self.store, mode="w")
                 return zarr.open_group(store=fs, mode="w", zarr_format=self.zarr_format)
             return zarr.open_group(self.store, mode="w", zarr_format=self.zarr_format)
+        return zarr.group(
+            store=self.store,
+            overwrite=True,
+            zarr_format=self.zarr_format,
+        )
 
     def _write_metadata(self) -> None:
         """Persist NGFF metadata to the opened root group."""
