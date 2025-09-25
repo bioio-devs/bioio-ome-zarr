@@ -26,145 +26,113 @@ def _validate_attrs_by_format(attrs: Dict[str, Any], zarr_format: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "zarr_format, shape, axes_names, scale, expected_shapes, literal_level1",
+    "zarr_format, level_shapes, axes_names, literal_level1",
     [
-        # 5D TCZYX, two levels (downsample Y/X)
+        # 5D TCZYX, two extra levels (downsample Y/X)
         (
             2,
-            (4, 2, 2, 64, 32),
-            ["t", "c", "z", "y", "x"],
-            ((1, 1, 1, 0.5, 0.5), (1, 1, 1, 0.25, 0.25)),
             [(4, 2, 2, 64, 32), (4, 2, 2, 32, 16), (4, 2, 2, 16, 8)],
+            ["t", "c", "z", "y", "x"],
             None,
         ),
         (
             3,
-            (4, 2, 2, 64, 32),
-            ["t", "c", "z", "y", "x"],
-            ((1, 1, 1, 0.5, 0.5), (1, 1, 1, 0.25, 0.25)),
             [(4, 2, 2, 64, 32), (4, 2, 2, 32, 16), (4, 2, 2, 16, 8)],
+            ["t", "c", "z", "y", "x"],
             None,
         ),
-        # 5D TCZYX, single level (no multiscale when scale=None)
-        (2, (4, 2, 2, 8, 6), ["t", "c", "z", "y", "x"], None, [(4, 2, 2, 8, 6)], None),
-        (3, (4, 2, 2, 8, 6), ["t", "c", "z", "y", "x"], None, [(4, 2, 2, 8, 6)], None),
-        # 5D TCZYX, one level with non-even shapes
+        # 5D TCZYX, single level (no multiscale)
+        (2, [(4, 2, 2, 8, 6)], ["t", "c", "z", "y", "x"], None),
+        (3, [(4, 2, 2, 8, 6)], ["t", "c", "z", "y", "x"], None),
+        # 5D TCZYX, two levels
         (
             2,
-            (1, 1, 1, 13, 23),
-            ["t", "c", "z", "y", "x"],
-            ((1, 1, 1, 0.5, 0.5),),
             [(1, 1, 1, 13, 23), (1, 1, 1, 6, 11)],
+            ["t", "c", "z", "y", "x"],
             None,
         ),
         (
             3,
-            (1, 1, 1, 13, 23),
-            ["t", "c", "z", "y", "x"],
-            ((1, 1, 1, 0.5, 0.5),),
             [(1, 1, 1, 13, 23), (1, 1, 1, 6, 11)],
+            ["t", "c", "z", "y", "x"],
             None,
         ),
-        # 5D TCZYX tiny literal check (level-1 expected values)
+        # 5D TCZYX literal check
         (
             2,
-            (1, 1, 1, 4, 4),
-            ["t", "c", "z", "y", "x"],
-            ((1, 1, 1, 0.5, 0.5),),
             [(1, 1, 1, 4, 4), (1, 1, 1, 2, 2)],
+            ["t", "c", "z", "y", "x"],
             np.array([[5, 7], [13, 15]], dtype=np.uint16),
         ),
         (
             3,
-            (1, 1, 1, 4, 4),
-            ["t", "c", "z", "y", "x"],
-            ((1, 1, 1, 0.5, 0.5),),
             [(1, 1, 1, 4, 4), (1, 1, 1, 2, 2)],
+            ["t", "c", "z", "y", "x"],
             np.array([[5, 7], [13, 15]], dtype=np.uint16),
         ),
-        # 2D YX, two levels with literal check
+        # 2D YX, three levels with literal check
         (
             2,
-            (4, 4),
-            None,
-            ((0.5, 0.5), (0.25, 0.25)),
             [(4, 4), (2, 2), (1, 1)],
+            None,
             np.array([[5, 7], [13, 15]], dtype=np.uint8),
         ),
         (
             3,
-            (4, 4),
-            None,
-            ((0.5, 0.5), (0.25, 0.25)),
             [(4, 4), (2, 2), (1, 1)],
+            None,
             np.array([[5, 7], [13, 15]], dtype=np.uint8),
         ),
-        # 3D default (ZYX), three levels (downsample Y/X only)
+        # 3D default (ZYX), 4 levels (downsample Y/X only)
         (
             2,
-            (4, 8, 8),
-            None,
-            ((1, 0.5, 0.5), (1, 0.25, 0.25), (1, 0.125, 0.125)),
             [(4, 8, 8), (4, 4, 4), (4, 2, 2), (4, 1, 1)],
             None,
+            None,
         ),
         (
             3,
-            (4, 8, 8),
-            None,
-            ((1, 0.5, 0.5), (1, 0.25, 0.25), (1, 0.125, 0.125)),
             [(4, 8, 8), (4, 4, 4), (4, 2, 2), (4, 1, 1)],
             None,
+            None,
         ),
-        # 4D CZYX, one level
+        # 4D CZYX, 2 levels
         (
             2,
-            (2, 4, 8, 8),
-            ["c", "z", "y", "x"],
-            ((1, 0.5, 0.5, 0.5),),
             [(2, 4, 8, 8), (2, 2, 4, 4)],
+            ["c", "z", "y", "x"],
             None,
         ),
         (
             3,
-            (2, 4, 8, 8),
-            ["c", "z", "y", "x"],
-            ((1, 0.5, 0.5, 0.5),),
             [(2, 4, 8, 8), (2, 2, 4, 4)],
+            ["c", "z", "y", "x"],
             None,
         ),
-        # 4D TZYX, two levels
+        # 4D TZYX, 3 levels
         (
             2,
-            (3, 4, 8, 8),
-            ["t", "z", "y", "x"],
-            ((1, 0.5, 0.5, 0.5), (1, 0.25, 0.25, 0.25)),
             [(3, 4, 8, 8), (3, 2, 4, 4), (3, 1, 2, 2)],
+            ["t", "z", "y", "x"],
             None,
         ),
         (
             3,
-            (3, 4, 8, 8),
-            ["t", "z", "y", "x"],
-            ((1, 0.5, 0.5, 0.5), (1, 0.25, 0.25, 0.25)),
             [(3, 4, 8, 8), (3, 2, 4, 4), (3, 1, 2, 2)],
+            ["t", "z", "y", "x"],
             None,
         ),
         # Mixed factors on T and spatial axes
         (
             2,
-            (4, 1, 3, 8, 8),
-            ["t", "c", "z", "y", "x"],
-            ((0.5, 1, 0.5, 0.5, 0.5),),
             [(4, 1, 3, 8, 8), (2, 1, 1, 4, 4)],
+            ["t", "c", "z", "y", "x"],
             None,
         ),
         (
             3,
-            (4, 1, 3, 8, 8),
-            ["t", "c", "z", "y", "x"],
-            ((0.5, 1, 0.5, 0.5, 0.5),),
             [(4, 1, 3, 8, 8), (2, 1, 1, 4, 4)],
+            ["t", "c", "z", "y", "x"],
             None,
         ),
     ],
@@ -172,24 +140,22 @@ def _validate_attrs_by_format(attrs: Dict[str, Any], zarr_format: int) -> None:
 def test_write_pyramid(
     tmp_path: pathlib.Path,
     zarr_format: int,
-    shape: DimTuple,
+    level_shapes: List[DimTuple],
     axes_names: Optional[List[str]],
-    scale: Optional[Tuple[Tuple[float, ...], ...]],
-    expected_shapes: List[DimTuple],
     literal_level1: Optional[np.ndarray],
 ) -> None:
     # Arrange
     save_uri = tmp_path / "e.zarr"
-    tiny_threshold = (1 * 1 * 1 * 4 * 4) if len(shape) == 5 else (4 * 4)
-    dtype = np.uint16 if int(np.prod(shape)) <= tiny_threshold else np.uint8
-    data = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+    shape0 = level_shapes[0]
+    tiny_threshold = (1 * 1 * 1 * 4 * 4) if len(shape0) == 5 else (4 * 4)
+    dtype = np.uint16 if int(np.prod(shape0)) <= tiny_threshold else np.uint8
+    data = np.arange(np.prod(shape0), dtype=dtype).reshape(shape0)
 
     kwargs = dict(
         store=str(save_uri),
-        shape=shape,
+        level_shapes=level_shapes,
         dtype=data.dtype,
         zarr_format=zarr_format,
-        scale=scale,
         image_name="TEST",
     )
     if axes_names:
@@ -202,49 +168,47 @@ def test_write_pyramid(
 
     # Assert
     grp = zarr.open(str(save_uri), mode="r")
-    for level, exp in enumerate(expected_shapes):
+    for level, exp in enumerate(level_shapes):
         assert grp[str(level)].shape == exp
 
-    if literal_level1 is not None and len(expected_shapes) >= 2:
+    if literal_level1 is not None and len(level_shapes) >= 2:
         np.testing.assert_array_equal(np.squeeze(grp["1"][:]), literal_level1)
 
     attrs = grp.attrs.asdict()
     _validate_attrs_by_format(attrs, zarr_format)
 
     if zarr_format == 2:
-        assert len(attrs["multiscales"][0]["datasets"]) == len(expected_shapes)
+        assert len(attrs["multiscales"][0]["datasets"]) == len(level_shapes)
     else:
-        assert len(attrs["ome"]["multiscales"][0]["datasets"]) == len(expected_shapes)
+        assert len(attrs["ome"]["multiscales"][0]["datasets"]) == len(level_shapes)
 
     # validate bioio_ome_zarr reader
     reader = Reader(str(save_uri))
     assert reader is not None
-    assert len(reader.shape) >= len(expected_shapes[0])
-    assert reader.shape == expected_shapes[0]
+    assert len(reader.shape) >= len(level_shapes[0])
+    assert reader.shape == level_shapes[0]
 
 
 @pytest.mark.parametrize(
-    "writer_zarr_format, writer_axes, writer_shape, src_axes, src_shape, scale, "
+    "writer_zarr_format, writer_axes, writer_level_shapes, src_axes, src_shape, "
     "expect_level1_literal, expect_error",
     [
-        # 2D TCYX, one level, literal check
+        # 2D TCYX, 2 levels, literal check
         (
             2,
             ["t", "c", "y", "x"],
-            (1, 1, 4, 4),
+            [(1, 1, 4, 4), (1, 1, 2, 2)],
             ["t", "c", "y", "x"],
             (1, 1, 4, 4),
-            ((1, 1, 0.5, 0.5),),
             np.array([[[[5, 7], [13, 15]]]], dtype=np.uint16),
             None,
         ),
         (
             3,
             ["t", "c", "y", "x"],
-            (1, 1, 4, 4),
+            [(1, 1, 4, 4), (1, 1, 2, 2)],
             ["t", "c", "y", "x"],
             (1, 1, 4, 4),
-            ((1, 1, 0.5, 0.5),),
             np.array([[[[5, 7], [13, 15]]]], dtype=np.uint16),
             None,
         ),
@@ -252,20 +216,18 @@ def test_write_pyramid(
         (
             2,
             ["t", "c", "y", "x"],
-            (2, 1, 8, 8),
+            [(2, 1, 8, 8), (2, 1, 4, 4)],
             ["t", "y", "x"],
             (2, 8, 8),
-            ((1, 1, 0.5, 0.5),),
             None,
             ValueError,
         ),
         (
             3,
             ["t", "c", "y", "x"],
-            (2, 1, 8, 8),
+            [(2, 1, 8, 8), (2, 1, 4, 4)],
             ["t", "y", "x"],
             (2, 8, 8),
-            ((1, 1, 0.5, 0.5),),
             None,
             ValueError,
         ),
@@ -275,10 +237,9 @@ def test_write_timepoints_array(
     tmp_path: Any,
     writer_zarr_format: int,
     writer_axes: List[str],
-    writer_shape: Tuple[int, ...],
+    writer_level_shapes: List[Tuple[int, ...]],
     src_axes: List[str],
     src_shape: Tuple[int, ...],
-    scale: Optional[Tuple[Tuple[float, ...], ...]],
     expect_level1_literal: Optional[np.ndarray],
     expect_error: Optional[type],
 ) -> None:
@@ -287,11 +248,10 @@ def test_write_timepoints_array(
     out_store = tmp_path / "out_array.zarr"
     writer = OMEZarrWriter(
         store=str(out_store),
-        shape=writer_shape,
+        level_shapes=writer_level_shapes,
         dtype=src.dtype,
         zarr_format=cast(Literal[2, 3], writer_zarr_format),
         axes_names=writer_axes,
-        scale=scale,
         image_name="TEST",
     )
     arr = da.from_array(src, chunks=tuple(max(1, s // 2) for s in src.shape))
@@ -313,36 +273,37 @@ def test_write_timepoints_array(
 
 
 @pytest.mark.parametrize(
-    "shape, chunk_size, shard_shape",
+    "level0_shape, chunk_size, shard_per_level",
     [
-        # 2D YX, 4x4 chunk, 4x4 shard
+        # 2D YX — chunk (4,4) tiles 16x16 with shard (4,4)
         ((16, 16), (4, 4), [(4, 4)]),
-        # 3D TYX, 1x4x4 chunk, 1x8x8 shard
-        ((2, 16, 16), (1, 4, 4), [(1, 8, 8)]),
-        # 4D CZYX, 1x1x4x4 chunk, 2x2x16x16 shard
-        ((2, 2, 16, 16), (1, 1, 4, 4), [(2, 2, 16, 16)]),
-        # 4D TZYX, 1x1x4x4 chunk, 1x2x16x16 shard
-        ((3, 2, 16, 16), (1, 1, 4, 4), [(1, 2, 16, 16)]),
-        # 5D TCZYX, 1x1x1x4x4 chunk, 2x2x2x16x16 shard
-        ((2, 2, 2, 16, 16), (1, 1, 1, 4, 4), [(2, 2, 2, 16, 16)]),
+        # 3D TYX — chunk (1,4,4); shards tile: (2,4,4) for (2,16,16)
+        ((2, 16, 16), (1, 4, 4), [(2, 4, 4)]),
+        # 4D CZYX — chunk (1,1,4,4); shards (2,2,4,4) for (2,2,16,16)
+        ((2, 2, 16, 16), (1, 1, 4, 4), [(2, 2, 4, 4)]),
+        # 4D TZYX — chunk (1,1,4,4); shards (3,2,4,4) for (3,2,16,16)
+        ((3, 2, 16, 16), (1, 1, 4, 4), [(3, 2, 4, 4)]),
+        # 5D TCZYX — chunk (1,1,1,4,4); shards (2,2,2,4,4) for (2,2,2,16,16)
+        ((2, 2, 2, 16, 16), (1, 1, 1, 4, 4), [(2, 2, 2, 4, 4)]),
     ],
 )
 def test_v3_sharding_and_chunking(
     tmp_path: Any,
-    shape: Tuple[int, ...],
+    level0_shape: Tuple[int, ...],
     chunk_size: Tuple[int, ...],
-    shard_shape: list[tuple[int, ...]],
+    shard_per_level: List[Tuple[int, ...]],
 ) -> None:
     # Arrange
-    data = np.zeros(shape, dtype=np.uint8)
+    level_shapes = [tuple(level0_shape)]
+    data = np.zeros(level0_shape, dtype=np.uint8)
     store = str(tmp_path / "test_highdim_v3.zarr")
     writer = OMEZarrWriter(
         store=store,
-        shape=shape,
+        level_shapes=level_shapes,
         dtype=data.dtype,
         zarr_format=3,
         chunk_shape=chunk_size,
-        shard_shape=shard_shape,
+        shard_shape=shard_per_level,
     )
 
     # Act
@@ -351,23 +312,22 @@ def test_v3_sharding_and_chunking(
     # Assert
     grp = zarr.open(store, mode="r")
     arr = grp["0"]
-    assert arr.shape == shape
+    assert arr.shape == level0_shape
     assert arr.chunks == chunk_size
-    assert arr.shards == shard_shape[0]
+    assert arr.shards == shard_per_level[0]
 
 
 @pytest.mark.parametrize(
-    "shape, axes_names, axes_types, axes_units, physical_pixel_size, scale, "
-    "channel_kwargs, chunk_size, shard_shape, filename",
+    "level_shapes, axes_names, axes_types, axes_units, physical_pixel_size, "
+    "channel_kwargs, base_chunk_size, shard_shapes, filename",
     [
-        # 5D TCZYX metadata reference (levels to 1×1)
+        # 5D TCZYX metadata reference
         (
-            (1, 1, 1, 4, 4),
+            [(1, 1, 1, 4, 4), (1, 1, 1, 2, 2), (1, 1, 1, 1, 1)],
             ["t", "c", "z", "y", "x"],
             ["time", "channel", "space", "space", "space"],
             [None, None, None, "micrometer", "micrometer"],
             [1.0, 1.0, 1.0, 0.5, 0.5],
-            ((1, 1, 1, 0.5, 0.5), (1, 1, 1, 0.25, 0.25)),
             {
                 "label": "Ch0",
                 "color": "FF0000",
@@ -377,56 +337,54 @@ def test_v3_sharding_and_chunking(
                 "inverted": False,
                 "window": {"min": 0, "max": 255, "start": 0, "end": 255},
             },
-            (1, 1, 1, 4, 4),
-            [(1, 1, 1, 4, 4), (1, 1, 1, 4, 4), (1, 1, 1, 4, 4)],
+            (1, 1, 1, 1, 1),
+            [(1, 1, 1, 4, 4), (1, 1, 1, 2, 2), (1, 1, 1, 1, 1)],
             "reference_zarr.json",
         ),
-        # 3D TYX metadata reference (levels to 2×2 then 1×1)
+        # 3D TYX metadata reference
         (
-            (2, 4, 4),
+            [(2, 4, 4), (2, 2, 2), (2, 1, 1)],
             ["t", "y", "x"],
             ["time", "space", "space"],
             [None, "micrometer", "micrometer"],
             [1.0, 0.5, 0.5],
-            ((1, 0.5, 0.5), (1, 0.25, 0.25)),
             {"label": "Ch0", "color": "FF0000"},
-            (1, 4, 4),
-            [(1, 4, 4), (1, 4, 4), (1, 4, 4)],
+            (1, 1, 1),
+            [(2, 4, 4), (2, 2, 2), (2, 1, 1)],
             "reference_zarr_tyx.json",
         ),
     ],
 )
 def test_v3_metadata_against_reference(
     tmp_path: Any,
-    shape: Any,
+    level_shapes: Any,
     axes_names: Any,
     axes_types: Any,
     axes_units: Any,
     physical_pixel_size: Any,
-    scale: Any,
     channel_kwargs: Any,
-    chunk_size: Any,
-    shard_shape: Any,
+    base_chunk_size: Any,
+    shard_shapes: Any,
     filename: Any,
 ) -> None:
     # Arrange
-    data = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
+    shape0 = tuple(level_shapes[0])
+    data = np.arange(np.prod(shape0), dtype=np.uint8).reshape(shape0)
     ch0 = Channel(**channel_kwargs)
     store_dir = str(tmp_path / "ref_test_v3.zarr")
-    chunk_shape = [tuple(chunk_size) for _ in range(1 + len(scale))]
+    chunk_shape = [tuple(base_chunk_size) for _ in range(len(level_shapes))]
 
     writer = OMEZarrWriter(
         store=store_dir,
-        shape=shape,
+        level_shapes=level_shapes,
         dtype="uint8",
         zarr_format=3,
         axes_names=axes_names,
         axes_types=axes_types,
         axes_units=axes_units,
         physical_pixel_size=physical_pixel_size,
-        scale=scale,
         chunk_shape=chunk_shape,
-        shard_shape=shard_shape,
+        shard_shape=shard_shapes,
         channels=[ch0],
         creator_info={"name": "pytest", "version": "0.1"},
     )
@@ -444,107 +402,91 @@ def test_v3_metadata_against_reference(
 
 
 @pytest.mark.parametrize(
-    "zarr_format, shape, axes_names, axes_types, scale, chunk_size, shard_shape",
+    "zarr_format, level_shapes, axes_names, axes_types, chunk_size, shard_shape",
     [
-        # 3D TYX small: 4->2->1
+        # 3D TYX small
         (
             2,
-            (2, 4, 4),
+            [(2, 4, 4), (2, 2, 2), (2, 1, 1)],
             ["t", "y", "x"],
             ["time", "space", "space"],
-            ((1, 0.5, 0.5), (1, 0.25, 0.25)),
-            (1, 2, 2),
-            [(2, 4, 4), (2, 4, 4), (2, 4, 4)],
+            (1, 1, 1),
+            None,
         ),
         (
             3,
-            (2, 4, 4),
+            [(2, 4, 4), (2, 2, 2), (2, 1, 1)],
             ["t", "y", "x"],
             ["time", "space", "space"],
-            ((1, 0.5, 0.5), (1, 0.25, 0.25)),
-            (1, 2, 2),
-            [(2, 4, 4), (2, 4, 4), (2, 4, 4)],
+            (1, 1, 1),
+            [(2, 4, 4), (2, 2, 2), (2, 1, 1)],
         ),
-        # 3D TYX rectangular: 6->2->1 with /3 per level
+        # 3D TYX
         (
             2,
-            (3, 6, 6),
+            [(3, 6, 6), (3, 2, 2), (3, 1, 1)],
             ["t", "y", "x"],
             ["time", "space", "space"],
-            ((1, 1 / 3, 1 / 3), (1, 1 / 6, 1 / 6)),
-            (1, 2, 2),
-            [(2, 4, 4), (2, 4, 4), (2, 4, 4)],
+            (1, 1, 1),
+            None,
         ),
         (
             3,
-            (3, 6, 6),
+            [(3, 6, 6), (3, 2, 2), (3, 1, 1)],
             ["t", "y", "x"],
             ["time", "space", "space"],
-            ((1, 1 / 3, 1 / 3), (1, 1 / 6, 1 / 6)),
-            (1, 2, 2),
-            [(2, 4, 4), (2, 4, 4), (2, 4, 4)],
+            (1, 1, 1),
+            [(3, 6, 6), (3, 2, 2), (3, 1, 1)],
         ),
-        # 3D TYX large spatial: 128 -> 32 -> 8 -> 2 -> 1 (four levels)
+        # 3D TYX large spatial
         (
             2,
-            (2, 128, 128),
+            [(2, 128, 128), (2, 32, 32), (2, 8, 8), (2, 2, 2), (2, 1, 1)],
             ["t", "y", "x"],
             ["time", "space", "space"],
-            (
-                (1, 0.25, 0.25),
-                (1, 0.0625, 0.0625),
-                (1, 0.015625, 0.015625),
-                (1, 0.0078125, 0.0078125),
-            ),
             (1, 32, 32),
-            [(4, 64, 64), (4, 64, 64), (4, 64, 64), (4, 64, 64), (2, 64, 64)],
+            None,
         ),
         (
             3,
-            (2, 128, 128),
+            [(2, 128, 128), (2, 32, 32), (2, 8, 8), (2, 2, 2), (2, 1, 1)],
             ["t", "y", "x"],
             ["time", "space", "space"],
-            (
-                (1, 0.25, 0.25),
-                (1, 0.0625, 0.0625),
-                (1, 0.015625, 0.015625),
-                (1, 0.0078125, 0.0078125),
-            ),
             (1, 32, 32),
-            [(2, 64, 64), (2, 64, 64), (2, 64, 64), (2, 64, 64), (2, 64, 64)],
-        ),
-        # 5D TCZYX large: spatial (Y/X) /4 per level; Z /2 until 1 (4 levels total)
-        (
-            2,
-            (2, 2, 4, 128, 128),
-            ["t", "c", "z", "y", "x"],
-            ["time", "channel", "space", "space", "space"],
-            (
-                (1, 1, 0.5, 0.25, 0.25),
-                (1, 1, 0.25, 0.0625, 0.0625),
-                (1, 1, 0.25, 0.015625, 0.015625),
-                (1, 1, 0.25, 0.0078125, 0.0078125),
-            ),
-            (1, 1, 2, 32, 32),
             [
-                (1, 1, 2, 64, 64),
-                (1, 1, 2, 64, 64),
-                (1, 1, 2, 64, 64),
-                (1, 1, 2, 64, 64),
-                (1, 1, 2, 64, 64),
+                (2, 64, 64),
+                (2, 64, 64),
+                (2, 64, 64),
+                (2, 64, 64),
+                (2, 64, 64),
             ],
         ),
+        # 5D TCZYX explicit levels
         (
-            3,
-            (2, 2, 4, 128, 128),
+            2,
+            [
+                (2, 2, 4, 128, 128),
+                (2, 2, 2, 32, 32),
+                (2, 2, 1, 8, 8),
+                (2, 2, 1, 2, 2),
+                (2, 2, 1, 1, 1),
+            ],
             ["t", "c", "z", "y", "x"],
             ["time", "channel", "space", "space", "space"],
-            (
-                (1, 1, 0.5, 0.25, 0.25),
-                (1, 1, 0.25, 0.0625, 0.0625),
-                (1, 1, 0.25, 0.015625, 0.015625),
-                (1, 1, 0.25, 0.0078125, 0.0078125),
-            ),
+            (1, 1, 2, 32, 32),
+            None,
+        ),
+        (
+            3,
+            [
+                (1, 1, 2, 128, 128),
+                (1, 1, 2, 64, 64),
+                (1, 1, 2, 32, 32),
+                (1, 1, 2, 16, 16),
+                (1, 1, 2, 8, 8),
+            ],
+            ["t", "c", "z", "y", "x"],
+            ["time", "channel", "space", "space", "space"],
             (1, 1, 2, 32, 32),
             [
                 (1, 1, 2, 64, 64),
@@ -559,38 +501,36 @@ def test_v3_metadata_against_reference(
 def test_full_vs_timepoints_equivalence(
     tmp_path: Any,
     zarr_format: int,
-    shape: Tuple[int, ...],
+    level_shapes: List[Tuple[int, ...]],
     axes_names: List[str],
     axes_types: List[str],
-    scale: Tuple[Tuple[float, ...], ...],
     chunk_size: Tuple[int, ...],
-    shard_shape: list[tuple[int, ...]],
+    shard_shape: Optional[List[Tuple[int, ...]]],
 ) -> None:
     # Arrange
-    data = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
+    shape0 = level_shapes[0]
+    data = np.arange(np.prod(shape0), dtype=np.uint8).reshape(shape0)
     full_store = str(tmp_path / "full.zarr")
     tp_store = str(tmp_path / "tp.zarr")
-    chunk_shape = [tuple(chunk_size) for _ in range(1 + len(scale))]
+    chunk_shape = [tuple(chunk_size) for _ in range(len(level_shapes))]
 
     w_full = OMEZarrWriter(
         store=full_store,
-        shape=shape,
+        level_shapes=level_shapes,
         dtype=data.dtype,
         zarr_format=cast(Literal[2, 3], zarr_format),
         axes_names=axes_names,
         axes_types=axes_types,
-        scale=scale,
         chunk_shape=chunk_shape,
         shard_shape=shard_shape,
     )
     w_tp = OMEZarrWriter(
         store=tp_store,
-        shape=shape,
+        level_shapes=level_shapes,
         dtype=data.dtype,
         zarr_format=cast(Literal[2, 3], zarr_format),
         axes_names=axes_names,
         axes_types=axes_types,
-        scale=scale,
         chunk_shape=chunk_shape,
         shard_shape=shard_shape,
     )
@@ -606,11 +546,148 @@ def test_full_vs_timepoints_equivalence(
     for lvl, _ in enumerate(w_full.level_shapes):
         arr_full = grp_full[str(lvl)]
         arr_tp = grp_tp[str(lvl)]
-
         np.testing.assert_array_equal(arr_full[...], arr_tp[...])  # data
-        assert arr_full.chunks == chunk_size
-        assert arr_tp.chunks == chunk_size
+        assert arr_full.chunks == chunk_shape[lvl]
+        assert arr_tp.chunks == chunk_shape[lvl]
         if zarr_format == 3:  # shards (v3)
+            assert shard_shape is not None
             expected_shard = shard_shape[lvl]
             assert arr_full.shards == expected_shard
             assert arr_tp.shards == expected_shard
+
+
+VALID_LEVELS = [(1, 8, 8), (1, 4, 4)]
+
+
+@pytest.mark.parametrize(
+    "zarr_format, level_shapes, chunk_shape, shard_shape, match",
+    [
+        # ---------------- Structural validation ----------------
+        # Empty level_shapes should fail
+        (3, [], None, None, r"level_shapes cannot be empty"),
+        # Per-level ndim mismatch
+        (3, [(1, 8, 8), (1, 4)], None, None, r"level_shapes\[1] length 2 != ndim 3"),
+        # Empty chunk_shape is invalid when explicitly provided
+        (3, VALID_LEVELS, [], None, r"chunk_shape cannot be empty"),
+        # Chunk ndim mismatch
+        (3, VALID_LEVELS, (4, 4), None, r"chunk_shape length 2 != ndim 3"),
+        # Chunk per-level count mismatch
+        (
+            3,
+            VALID_LEVELS,
+            [(1, 4, 4), (1, 4, 4), (1, 4, 4)],
+            None,
+            r"chunk_shape must have 2 entries \(per level\), got 3",
+        ),
+        # Empty shard_shape is invalid when explicitly provided
+        (3, VALID_LEVELS, None, [], r"shard_shape cannot be empty"),
+        # Shard ndim mismatch
+        (
+            3,
+            VALID_LEVELS,
+            None,
+            [(2, 2), (2, 2)],
+            r"shard_shape\[0] length 2 != ndim 3",
+        ),
+        # Shard per-level count mismatch
+        (
+            3,
+            VALID_LEVELS,
+            None,
+            [(1, 2, 2)],
+            r"shard_shape must have 2 entries \(per level\), got 1",
+        ),
+        # ---------------- Chunk validation ----------------
+        # Chunk dimension must be >= 1
+        (
+            3,
+            VALID_LEVELS,
+            [(1, 0, 4), (1, 2, 2)],
+            None,
+            r"chunk_shape\[0]\[1] must be >= 1",
+        ),
+        # Per-level count mismatch after normalization
+        (
+            3,
+            [(1, 8, 8), (1, 4, 4), (1, 2, 2)],
+            [(1, 4, 4), (1, 2, 2)],
+            None,
+            r"chunk_shape must have 3 entries",
+        ),
+        # ---------------- Shard validation ----------------
+        # Sharding not supported for Zarr v2
+        (
+            2,
+            VALID_LEVELS,
+            [(1, 2, 2), (1, 2, 2)],
+            [(1, 2, 2), (1, 2, 2)],
+            r"shard_shape is not supported for Zarr v2",
+        ),
+        # Shard per-level count mismatch
+        (
+            3,
+            VALID_LEVELS,
+            [(1, 2, 2), (1, 2, 2)],
+            [(1, 2, 2)],
+            r"shard_shape must have 2 entries",
+        ),
+        # Shard ndim mismatch
+        (
+            3,
+            VALID_LEVELS,
+            [(1, 2, 2), (1, 2, 2)],
+            [(1, 2, 2), (2, 2)],
+            r"shard_shape\[1] length 2 != ndim 3",
+        ),
+        # Shard dimension must be >= 1
+        (
+            3,
+            VALID_LEVELS,
+            [(1, 2, 2), (1, 2, 2)],
+            [(1, 2, 0), (1, 2, 2)],
+            r"shard_shape\[0]\[2] must be >= 1",
+        ),
+        # Shard must be a multiple of the chunk size (level 0)
+        (
+            3,
+            VALID_LEVELS,
+            [(1, 4, 4), (1, 2, 2)],
+            [(1, 6, 8), (1, 2, 2)],  # 6 % 4 != 0
+            r"must be a multiple of chunk_dim 4",
+        ),
+        # Shard must be a multiple of the chunk size (level 1)
+        (
+            3,
+            VALID_LEVELS,
+            [(1, 4, 4), (1, 2, 2)],
+            [(1, 8, 8), (1, 3, 2)],  # 3 % 2 != 0 on Y axis
+            r"must be a multiple of chunk_dim 2",
+        ),
+    ],
+)
+def test_writer_validation_errors(
+    zarr_format: int,
+    level_shapes: list[tuple[int, ...]],
+    chunk_shape: list[tuple[int, ...]] | tuple[int, ...] | None,
+    shard_shape: list[tuple[int, ...]] | None,
+    match: str,
+) -> None:
+    """Ensure invalid configurations raise the expected ValueError."""
+
+    kwargs = dict(
+        store="in-memory.zarr",  # no disk write called in init.
+        dtype=np.uint8,
+        axes_names=["t", "y", "x"],
+    )
+    kwargs["zarr_format"] = zarr_format
+
+    def build() -> OMEZarrWriter:
+        return OMEZarrWriter(
+            level_shapes=level_shapes,
+            chunk_shape=chunk_shape,
+            shard_shape=shard_shape,
+            **kwargs,
+        )
+
+    with pytest.raises(ValueError, match=match):
+        build()
