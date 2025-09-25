@@ -42,8 +42,8 @@ def _validate_attrs_by_format(attrs: Dict[str, Any], zarr_format: int) -> None:
             None,
         ),
         # 5D TCZYX, single level (no multiscale)
-        (2, (4, 2, 2, 8, 6), ["t", "c", "z", "y", "x"], None),
-        (3, (4, 2, 2, 8, 6), ["t", "c", "z", "y", "x"], None),
+        (2, [(4, 2, 2, 8, 6)], ["t", "c", "z", "y", "x"], None),
+        (3, [(4, 2, 2, 8, 6)], ["t", "c", "z", "y", "x"], None),
         # 5D TCZYX, two levels
         (
             2,

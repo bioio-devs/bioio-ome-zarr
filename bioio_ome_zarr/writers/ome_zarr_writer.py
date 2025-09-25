@@ -36,11 +36,12 @@ def _normalize_levelwise(
     """Normalize a single N-dim shape or per-level list of N-dim shapes into a
     per-level List[Tuple[int, ...]] with structural validation.
 
-    Structural checks only:
+    Checks:
       - non-empty
       - detect single-shape vs per-level
       - per-level count equals `num_levels`
       - each shape length equals `ndim`
+      - each dim >= 1
     """
     if len(spec) == 0:
         raise ValueError(f"{label} cannot be empty")
@@ -50,7 +51,11 @@ def _normalize_levelwise(
         single_shape = cast(DimSeq, spec)
         if len(single_shape) != ndim:
             raise ValueError(f"{label} length {len(single_shape)} != ndim {ndim}")
-        return [tuple(int(v) for v in single_shape)] * num_levels
+        single_tuple = tuple(int(v) for v in single_shape)
+        for axis_index, value in enumerate(single_tuple):
+            if value < 1:
+                raise ValueError(f"{label}[{axis_index}] must be >= 1")
+        return [single_tuple] * num_levels
 
     # Per-level case
     per_level_shapes = cast(PerLevelDimSeq, spec)
@@ -66,7 +71,11 @@ def _normalize_levelwise(
                 f"{label}[{level_index}] length {len(per_level_shape)} != "
                 f"ndim {ndim}"
             )
-        normalized.append(tuple(int(v) for v in per_level_shape))
+        level_tuple = tuple(int(v) for v in per_level_shape)
+        for axis_index, value in enumerate(level_tuple):
+            if value < 1:
+                raise ValueError(f"{label}[{level_index}][{axis_index}] must be >= 1")
+        normalized.append(level_tuple)
     return normalized
 
 
@@ -81,51 +90,56 @@ def _validate_shapes(
 
     Rules:
       - All: per-level counts must match `level_shapes`; ndim must match.
-      - Chunks: each dim >= 1 (chunks may exceed level dims; allowed by Zarr).
-      - Shards (v3 only): provided? each dim >= 1 AND multiple of chunk dim.
-                          No requirement that shards ≤ level dims or tile.
+      - Chunks: positivity guaranteed by normalization.
+      - Shards (v3 only): each shard dim must be a multiple of its chunk dim.
+        No requirement that shards ≤ level dims or tile the level.
       - Shards (v2): forbidden.
     """
-    num_levels = len(level_shapes)
-    if num_levels == 0:
+    level_count = len(level_shapes)
+    if level_count == 0:
         raise ValueError("level_shapes cannot be empty")
-    ndim = len(level_shapes[0])
+    num_dims = len(level_shapes[0])
 
-    def _expect_len(label: str, seq: List[Tuple[int, ...]], n: int) -> None:
-        if len(seq) != n:
+    def expect_per_level_count(
+        label: str, seq: List[Tuple[int, ...]], expected: int
+    ) -> None:
+        if len(seq) != expected:
             raise ValueError(
-                f"{label} must have {n} entries (per level), got {len(seq)}"
+                f"{label} must have {expected} entries (per level), got " f"{len(seq)}"
             )
 
-    def _expect_ndim(label: str, shp: Tuple[int, ...], lvl: int) -> None:
-        if len(shp) != ndim:
-            raise ValueError(f"{label}[{lvl}] length {len(shp)} != ndim {ndim}")
+    def expect_ndim_match(
+        label: str,
+        shape_tuple: Tuple[int, ...],
+        level_index: int,
+    ) -> None:
+        if len(shape_tuple) != num_dims:
+            raise ValueError(
+                f"{label}[{level_index}] length {len(shape_tuple)} != "
+                f"ndim {num_dims}"
+            )
 
-    def _expect_pos(label: str, val: int, lvl: int, dim: int) -> None:
-        if int(val) < 1:
-            raise ValueError(f"{label}[{lvl}][{dim}] must be >= 1")
+    # ---- chunk shapes ----
+    expect_per_level_count("chunk_shape", chunk_shapes_per_level, level_count)
+    for level_index, chunk_shape_level in enumerate(chunk_shapes_per_level):
+        expect_ndim_match("chunk_shape", chunk_shape_level, level_index)
 
-    # ---- chunks ----
-    _expect_len("chunk_shape", chunk_shapes_per_level, num_levels)
-    for lvl, cshp in enumerate(chunk_shapes_per_level):
-        _expect_ndim("chunk_shape", cshp, lvl)
-        for dim, c in enumerate(cshp):
-            _expect_pos("chunk_shape", c, lvl, dim)
-
-    # ---- shards ----
+    # ---- shard shapes ----
     if shards_per_level is not None:
         if zarr_format == 2:
             raise ValueError("shard_shape is not supported for Zarr v2.")
-        _expect_len("shard_shape", shards_per_level, num_levels)
-        for lvl, sshp in enumerate(shards_per_level):
-            _expect_ndim("shard_shape", sshp, lvl)
-            cshp = chunk_shapes_per_level[lvl]
-            for dim, (s, c) in enumerate(zip(sshp, cshp)):
-                _expect_pos("shard_shape", s, lvl, dim)
-                if int(s) % int(c) != 0:
+        expect_per_level_count("shard_shape", shards_per_level, level_count)
+        for level_index, shard_shape_level in enumerate(shards_per_level):
+            expect_ndim_match("shard_shape", shard_shape_level, level_index)
+            chunk_shape_level = chunk_shapes_per_level[level_index]
+            for axis_index, (shard_dim, chunk_dim) in enumerate(
+                zip(shard_shape_level, chunk_shape_level)
+            ):
+                if int(shard_dim) % int(chunk_dim) != 0:
                     raise ValueError(
-                        f"shard_shape[{lvl}][{dim}] (= {int(s)}) must be a "
-                        f"multiple of chunk_dim {int(c)}"
+                        f"shard_shape[{level_index}][{axis_index}] (= "
+                        f"{int(shard_dim)}) must be a multiple of chunk_dim "
+                        f"{int(chunk_dim)}"
                     )
 
 
@@ -229,9 +243,6 @@ class OMEZarrWriter:
             ndim=inferred_ndim,
             label="level_shapes",
         )
-        self.level_shapes = [
-            tuple(max(1, int(dim)) for dim in shape) for shape in self.level_shapes
-        ]
 
         self.shape = tuple(self.level_shapes[0])
         self.ndim = len(self.shape)
