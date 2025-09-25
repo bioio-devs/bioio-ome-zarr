@@ -278,7 +278,7 @@ class OMEZarrWriter:
         else:
             computed_chunk_shapes = multiscale_chunk_size_from_memory_target(
                 self.level_shapes,
-                str(self.dtype),
+                self.dtype,
                 16 << 20,  # ~16 MiB target
             )
             # normalize to List[Tuple[int, ...]]
