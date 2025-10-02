@@ -179,7 +179,7 @@ class OMEZarrWriter:
                 region=(slice(k + toffset, k + toffset + 1),),
             )
         for j in range(1, len(self.levels)):
-            nextshape = (end_t - start_t,) + self.levels[j].shape[1:]
+            nextshape = (end_t - start_t,) + tuple(self.levels[j].shape[1:])
             data_tczyx = resize(data_tczyx, nextshape, order=0).astype(dtype)
             for k in range(start_t, end_t):
                 subset = data_tczyx[[k - start_t]]
@@ -359,7 +359,7 @@ class OMEZarrWriter:
         metadata_dict = _pop_metadata_optionals(metadata_dict)
 
         # get the total shape as dict:
-        shapedict = dim_tuple_to_dict(self.levels[0].shape)
+        shapedict = dim_tuple_to_dict(tuple(self.levels[0].shape))
 
         # add the omero data
         ome_json = build_ome(

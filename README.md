@@ -79,11 +79,11 @@ Below is a reference of the `OMEZarrWriter` parameters, For complete details, se
 | Parameter                 | Type                                            | Description                                                                                                                                                              |
 | ------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **store**                 | `str` or `zarr.storage.StoreLike`               | Filesystem path, URL (via `fsspec`), or Store-like object for the root group.                                                                                            |
-| **shape**                 | `tuple[int, ...]`                               | Shape of the highest‑resolution (level‑0) image, e.g., `(1, 1, 4, 64, 64)`.                                                                                                |
+| **shape**                 | `Sequence[int]`                               | Shape of the highest‑resolution (level‑0) image, e.g., `(1, 1, 4, 64, 64)`.                                                                                                |
 | **dtype**                 | `np.dtype` or `str`                             | NumPy dtype for the on‑disk array (e.g., `uint8`, `uint16`).                                                                                                             |
-| **scale**                 | `tuple[tuple[float, ...], ...]` or `None`       | Per‑level, per‑axis *relative sizes* vs. level‑0. Example: `((1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25))` creates two lower‑res levels. If `None`, only level‑0 is written. |
-| **chunk\_shape**          | `tuple[tuple[int, ...], ...]` or `None`         | Chunk shape per level. Example: ((1, 1, 1, 64, 64), (1, 1, 1, 32, 32))If `None`, a suggested ≈16 MiB chunk is derived for v3; v2 applies a legacy per‑level policy. Also accepts a single shape to use across all levels.                                                    |
-| **shard\_factor**         | `tuple[int, ...]` or `None`                     | v3‑only: multiply chunks to form shard sizes. Ignored in v2.                                                                                                             |
+| **scale**                 | `Sequence[Sequence[float]]` or `None`       | Per‑level, per‑axis *relative sizes* vs. level‑0. Example: `((1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25))` creates two lower‑res levels. If `None`, only level‑0 is written. |
+| **chunk\_shape**          | `Sequence[int]` or `Sequence[Sequence[int]]]` or `None`         | Chunk shape per level. Example: ((1, 1, 1, 64, 64), (1, 1, 1, 32, 32))If `None`, a suggested ≈16 MiB chunk is derived for v3; v2 applies a legacy per‑level policy. Also accepts a single shape to use across all levels.                                                    |
+| **shard\_shape**         | `Sequence[int]` or `Sequence[Sequence[int]]]` or `None`                     |             **Zarr v3 only.** Either: a single N-dim sequence applied to all levels, or a per-level sequence-of-sequences.                                                                                                         |
 | **compressor**            | `BloscCodec` or `numcodecs.abc.Codec` or `None` | Compression codec. v2: `numcodecs.Blosc`; v3: `zarr.codecs.BloscCodec`.                                                                                                  |
 | **zarr\_format**          | `Literal[2, 3]`                                 | Target Zarr format — `2` (NGFF 0.4) or `3` (NGFF 0.5).    Default `3`                                                                                                               |
 | **image\_name**           | `str` or `None`                                 | Name used in multiscales metadata. Default: `"Image"`.                                                                                                                   |
@@ -211,7 +211,8 @@ writer = OMEZarrWriter(
     dtype="uint8",
     zarr_format=3,
     scale=((1, 1, 0.5, 0.5, 0.5),),
-    shard_factor=(1, 1, 2, 2, 2),  # multiply chunks to form shard sizes
+    chunk_shape = (1,1,1,128,128)
+    shard_shape=[(1,1,1,256,256),(1,1,1,256,256)], # define per level shard shape
     compressor=BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.bitshuffle),
 )
 
@@ -278,24 +279,43 @@ writer.write_full_volume(
 ```
 ### Writer Utility Functions
 
-**`chunk_size_from_memory_target(shape, dtype, memory_target, order=None) -> tuple[int, ...]`**
-Suggests a chunk shape that fits within the specified memory target (in bytes).
+**`multiscale_chunk_size_from_memory_target(level_shapes, dtype, memory_target) -> list[tuple[int, ...]]`**  
+Suggests **per-level** chunk shapes that each fit within a fixed byte budget.
 
-* Spatial axes (`Z`, `Y`, `X`) start at full size; non-spatial axes start at `1`.
-* All dimensions are halved until the total size (in bytes) fits within `memory_target`.
-* Example:
+- Works for any ndim (2…5).
+- **prioritizes the highest-index axis first** (grow X, then Y, then Z, then C, then T).
+
+### Example: 16 MiB budget on large pyramids (rightmost-axis first)
 
 ```python
-from bioio_ome_zarr.writers import chunk_size_from_memory_target
-chunk_size_from_memory_target((1, 1, 16, 1024, 1024), "uint16", 16 * 1024 * 1024) # 16 mbs
-# Returns: (1, 1, 4, 512, 512)
+from bioio_ome_zarr.writers.utils import multiscale_chunk_size_from_memory_target
+
+# 4D (C, Z, Y, X) across 5 levels
+level_shapes = [
+    (8, 64, 4096, 4096),
+    (8, 64, 2048, 2048),
+    (8, 64, 1024, 1024),
+    (8, 64,  512,  512),
+    (8, 64,  256,  256),
+]
+
+# 16 MiB target
+chunks = multiscale_chunk_size_from_memory_target(level_shapes, "uint16", 16 << 20)
+
+chunks = [
+   (1,  1, 2048, 4096),
+   (1,  2, 2048, 2048),
+   (1,  8, 1024, 1024),
+   (1, 32,  512,  512),
+   (2, 64,  256,  256),
+ ]
 ```
 
 **`add_zarr_level(existing_zarr, scale_factors, compressor=None, t_batch=4) -> None`**
 Appends a new resolution level to an existing **v2 OME-Zarr** store, writing in time (`T`) batches.
 
 * `scale_factors`: per-axis scale relative to the previous highest level (tuple of length 5 for `T, C, Z, Y, X`).
-* Automatically determines appropriate chunk size using `chunk_size_from_memory_target`.
+* Automatically determines appropriate chunk size using `multiscale_chunk_size_from_memory_target`.
 * Updates the `multiscales` metadata block with the new level's path and transformations.
 * Example:
 
