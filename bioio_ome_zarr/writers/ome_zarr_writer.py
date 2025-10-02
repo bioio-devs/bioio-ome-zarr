@@ -189,7 +189,7 @@ class OMEZarrWriter:
             Either a single chunk shape (applied to all levels),
             e.g. ``(1,1,16,256,256)``, or per-level chunk shapes,
             e.g. ``[(1,1,16,256,256), (1,1,16,128,128), ...]``. If ``None``,
-            a suggested ≈16 MiB chunk is derived per level;
+            a suggested ≈16 MiB chunk is derived per level.
         shard_shape : Optional[Union[Sequence[int], Sequence[Sequence[int]]]]
             **Zarr v3 only.** Either:
               - a single N-dim sequence applied to all levels, or

@@ -307,6 +307,11 @@ def multiscale_chunk_size_from_memory_target(
     Compute per-level chunk shapes under a fixed byte budget, **prioritizing the
     highest-index axis first** (i.e., grow X, then Y, then Z, ... moving left).
 
+    Note
+    -----
+    These chunk sizes represent an **in-memory target only** and do not account
+    for compression.
+
     Returns
     -------
     list[Sequence[int]]
