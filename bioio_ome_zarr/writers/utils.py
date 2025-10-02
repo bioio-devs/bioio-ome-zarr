@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple, Union, cast
@@ -12,13 +13,19 @@ from zarr.storage import LocalStore
 
 from bioio_ome_zarr.reader import Reader
 
+DimSeq = Sequence[int]
+PerLevelDimSeq = Sequence[DimSeq]
+
+# LEGACY (Remove with V2 writer)
 DimTuple = Tuple[int, ...]
 
 
 @dataclass
 class ZarrLevel:
-    shape: DimTuple
-    chunk_size: DimTuple
+    """Descriptor for a Zarr multiscale level."""
+
+    shape: DimSeq
+    chunk_size: DimSeq
     dtype: np.dtype
     zarray: zarr.Array
 
@@ -115,10 +122,10 @@ def compute_level_shapes(
     return shapes
 
 
-# This is used as the default for V2 instead of 16mb chunk default
+# LEGACY (Remove with V2 writer)
 def compute_level_chunk_sizes_zslice(
     level_shapes: List[Tuple[int, ...]],
-) -> List[DimTuple]:
+) -> List[DimSeq]:
     """
     Compute Z-slice–based chunk sizes for a multiscale pyramid.
     Parameters
@@ -128,12 +135,12 @@ def compute_level_chunk_sizes_zslice(
         but expecting at least 5 dimensions for TCZYX indexing.
     Returns
     -------
-    List[DimTuple]
+    List[DimSeq]
         Chunk sizes as 5-tuples (T, C, Z, Y, X).
     """
 
     ndim = len(level_shapes[0])
-    result: List[DimTuple] = []
+    result: List[DimSeq] = []
 
     if ndim == 5:
         # Legacy exact behavior
@@ -143,7 +150,7 @@ def compute_level_chunk_sizes_zslice(
             curr_shape = level_shapes[i]
             scale = tuple(prev_shape[j] / curr_shape[j] for j in range(5))
             p = result[i - 1]
-            new_chunk: DimTuple = (
+            new_chunk: DimSeq = (
                 1,
                 1,
                 int(scale[4] * scale[3] * p[2]),
@@ -177,6 +184,7 @@ def compute_level_chunk_sizes_zslice(
     return result
 
 
+# LEGACY (Remove with V3 writer)
 def chunk_size_from_memory_target(
     shape: Tuple[int, ...],
     dtype: Union[str, np.dtype],
@@ -288,3 +296,55 @@ def add_zarr_level(
     print(
         f"Added level {new_idx}: shape={new_shape}, chunks={chunks}, scale={new_scale}"
     )
+
+
+def multiscale_chunk_size_from_memory_target(
+    level_shapes: Sequence[Sequence[int]],
+    dtype: Union[str, np.dtype],
+    memory_target: int,
+) -> List[Sequence[int]]:
+    """
+    Compute per-level chunk shapes under a fixed byte budget, **prioritizing the
+    highest-index axis first** (i.e., grow X, then Y, then Z, ... moving left).
+
+    Note
+    -----
+    These chunk sizes represent an **in-memory target only** and do not account
+    for compression.
+
+    Returns
+    -------
+    list[Sequence[int]]
+        Per-level chunk shapes (same ndim/order as the input).
+    """
+    if not level_shapes:
+        raise ValueError("level_shapes cannot be empty")
+
+    # Validation
+    for i, shp in enumerate(level_shapes):
+        if len(shp) < 2:
+            raise ValueError(f"level_shapes[{i}] must have ndim >= 2, got {len(shp)}")
+        if any(int(d) < 1 for d in shp):
+            raise ValueError(f"level_shapes[{i}] has non-positive dimension(s): {shp}")
+
+    itemsize = np.dtype(dtype).itemsize
+    if memory_target < itemsize:
+        raise ValueError(f"memory_target {memory_target} < dtype size {itemsize}")
+
+    budget_elems = max(1, memory_target // itemsize)
+
+    out: List[Sequence[int]] = []
+    for shp in level_shapes:
+        # Start with all-ones, grow from rightmost axis leftward
+        chunk = [1] * len(shp)
+        for axis in reversed(range(len(shp))):
+            used = math.prod(chunk)
+            if used >= budget_elems:
+                # No room left; keep remaining (left) axes at 1
+                break
+            max_here = budget_elems // used
+            # Cap by the level dimension and ensure at least 1
+            chunk[axis] = max(1, min(int(shp[axis]), int(max_here)))
+        out.append(tuple(chunk))
+
+    return out

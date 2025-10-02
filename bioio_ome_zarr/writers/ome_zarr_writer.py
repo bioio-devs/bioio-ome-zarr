@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
 import numcodecs
@@ -9,23 +9,18 @@ from zarr.codecs import BloscCodec, BloscShuffle
 
 from .metadata import Axes, Channel, MetadataParams, build_ngff_metadata
 from .utils import (
-    chunk_size_from_memory_target,
-    compute_level_chunk_sizes_zslice,
+    DimSeq,
+    PerLevelDimSeq,
+    multiscale_chunk_size_from_memory_target,
     resize,
 )
 
-# ---------------------
-# Type aliases
-# ---------------------
-DimSeq = Sequence[int]
-PerLevelDimSeq = Sequence[DimSeq]
 MultiResolutionShapeSpec = Union[DimSeq, PerLevelDimSeq]
+
 
 # ---------------------
 # Helpers
 # ---------------------
-
-
 def _normalize_levelwise(
     spec: MultiResolutionShapeSpec,
     *,
@@ -55,7 +50,7 @@ def _normalize_levelwise(
         single_shape = cast(DimSeq, spec)
         if len(single_shape) != ndim:
             raise ValueError(f"{label} length {len(single_shape)} != ndim {ndim}")
-        single_tuple = tuple(int(v) for v in single_shape)
+        single_tuple = tuple(dim for dim in single_shape)
         for axis_index, value in enumerate(single_tuple):
             if value < 1:
                 raise ValueError(f"{label}[{axis_index}] must be >= 1")
@@ -75,7 +70,7 @@ def _normalize_levelwise(
                 f"{label}[{level_index}] length {len(per_level_shape)} != "
                 f"ndim {ndim}"
             )
-        level_tuple = tuple(int(v) for v in per_level_shape)
+        level_tuple = tuple(dim for dim in per_level_shape)
         for axis_index, value in enumerate(level_tuple):
             if value < 1:
                 raise ValueError(f"{label}[{level_index}][{axis_index}] must be >= 1")
@@ -137,11 +132,11 @@ def _validate_shapes(
             for axis_index, (shard_dim, chunk_dim) in enumerate(
                 zip(shard_shape_level, chunk_shape_level)
             ):
-                if int(shard_dim) % int(chunk_dim) != 0:
+                if shard_dim % chunk_dim != 0:
                     raise ValueError(
                         f"shard_shape[{level_index}][{axis_index}] (= "
-                        f"{int(shard_dim)}) must be a multiple of chunk_dim "
-                        f"{int(chunk_dim)}"
+                        f"{shard_dim}) must be a multiple of chunk_dim "
+                        f"{chunk_dim}"
                     )
 
 
@@ -194,9 +189,7 @@ class OMEZarrWriter:
             Either a single chunk shape (applied to all levels),
             e.g. ``(1,1,16,256,256)``, or per-level chunk shapes,
             e.g. ``[(1,1,16,256,256), (1,1,16,128,128), ...]``. If ``None``,
-            a suggested ≈16 MiB chunk is derived from level-0 and reused;
-            for Zarr v2, if omitted, a legacy per-level policy may be applied
-            when axes are TCZYX.
+            a suggested ≈16 MiB chunk is derived per level.
         shard_shape : Optional[Union[Sequence[int], Sequence[Sequence[int]]]]
             **Zarr v3 only.** Either:
               - a single N-dim sequence applied to all levels, or
@@ -283,14 +276,15 @@ class OMEZarrWriter:
                 label="chunk_shape",
             )
         else:
-            suggested = chunk_size_from_memory_target(
-                self.level_shapes[0],
+            computed_chunk_shapes = multiscale_chunk_size_from_memory_target(
+                self.level_shapes,
                 self.dtype,
-                16 << 20,
+                16 << 20,  # ~16 MiB target
             )
+            # normalize to List[Tuple[int, ...]]
             self.chunk_shapes_per_level = [
-                tuple(max(1, min(int(s), int(d))) for s, d in zip(suggested, shape))
-                for shape in self.level_shapes
+                tuple(chunk_dim for chunk_dim in single_chunk)
+                for single_chunk in computed_chunk_shapes
             ]
 
         # Format & compressor
@@ -507,21 +501,6 @@ class OMEZarrWriter:
 
         if self.zarr_format == 2:
             # v2
-            if not self._chunk_shape_explicit:
-                # If 5D TCZYX, use legacy z-slice per-level chunking; otherwise
-                # keep the suggested per-level chunking already prepared.
-                is_tczyx = self.ndim == 5 and [n.lower() for n in self.axes.names] == [
-                    "t",
-                    "c",
-                    "z",
-                    "y",
-                    "x",
-                ]
-                if is_tczyx:
-                    self.chunk_shapes_per_level = compute_level_chunk_sizes_zslice(
-                        self.level_shapes
-                    )
-
             for level_index, level_shape in enumerate(self.level_shapes):
                 chunks_lvl = self.chunk_shapes_per_level[level_index]
                 arr = self.root.zeros(

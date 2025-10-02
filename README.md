@@ -279,24 +279,43 @@ writer.write_full_volume(
 ```
 ### Writer Utility Functions
 
-**`chunk_size_from_memory_target(shape, dtype, memory_target, order=None) -> tuple[int, ...]`**
-Suggests a chunk shape that fits within the specified memory target (in bytes).
+**`multiscale_chunk_size_from_memory_target(level_shapes, dtype, memory_target) -> list[tuple[int, ...]]`**  
+Suggests **per-level** chunk shapes that each fit within a fixed byte budget.
 
-* Spatial axes (`Z`, `Y`, `X`) start at full size; non-spatial axes start at `1`.
-* All dimensions are halved until the total size (in bytes) fits within `memory_target`.
-* Example:
+- Works for any ndim (2…5).
+- **prioritizes the highest-index axis first** (grow X, then Y, then Z, then C, then T).
+
+### Example: 16 MiB budget on large pyramids (rightmost-axis first)
 
 ```python
-from bioio_ome_zarr.writers import chunk_size_from_memory_target
-chunk_size_from_memory_target((1, 1, 16, 1024, 1024), "uint16", 16 * 1024 * 1024) # 16 mbs
-# Returns: (1, 1, 4, 512, 512)
+from bioio_ome_zarr.writers.utils import multiscale_chunk_size_from_memory_target
+
+# 4D (C, Z, Y, X) across 5 levels
+level_shapes = [
+    (8, 64, 4096, 4096),
+    (8, 64, 2048, 2048),
+    (8, 64, 1024, 1024),
+    (8, 64,  512,  512),
+    (8, 64,  256,  256),
+]
+
+# 16 MiB target
+chunks = multiscale_chunk_size_from_memory_target(level_shapes, "uint16", 16 << 20)
+
+chunks = [
+   (1,  1, 2048, 4096),
+   (1,  2, 2048, 2048),
+   (1,  8, 1024, 1024),
+   (1, 32,  512,  512),
+   (2, 64,  256,  256),
+ ]
 ```
 
 **`add_zarr_level(existing_zarr, scale_factors, compressor=None, t_batch=4) -> None`**
 Appends a new resolution level to an existing **v2 OME-Zarr** store, writing in time (`T`) batches.
 
 * `scale_factors`: per-axis scale relative to the previous highest level (tuple of length 5 for `T, C, Z, Y, X`).
-* Automatically determines appropriate chunk size using `chunk_size_from_memory_target`.
+* Automatically determines appropriate chunk size using `multiscale_chunk_size_from_memory_target`.
 * Updates the `multiscales` metadata block with the new level's path and transformations.
 * Example:
 
