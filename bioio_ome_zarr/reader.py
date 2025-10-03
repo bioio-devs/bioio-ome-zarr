@@ -25,15 +25,16 @@ log = logging.getLogger(__name__)
 
 class Reader(reader.Reader):
     """
-    The main class of the `bioio_ome_zarr` plugin. This class is subclass
+    The main class of the `bioio_ome_zarr` plugin. This class is a subclass
     of the abstract class `reader` (`BaseReader`) in `bioio-base`.
 
     Parameters
     ----------
-    image: types.PathLike
-        String or Path to the ZARR top directory.
-    fs_kwargs: Dict[str, Any]
-        Passed to fsspec. For public S3 buckets, use {"anon": True}.
+    image : types.PathLike
+        String or Path to the Zarr top directory (v2 or v3 store).
+    fs_kwargs : Dict[str, Any]
+        Passed to fsspec when constructing the filesystem
+        (e.g. {"anon": True} for public S3).
     """
 
     _channel_names: Optional[List[str]] = None
@@ -66,10 +67,11 @@ class Reader(reader.Reader):
             raise exceptions.UnsupportedFileFormatError(
                 self.__class__.__name__,
                 self._path,
-                "Could not parse a zarr file at the provided path.",
+                "Could not parse a Zarr store at the provided path.",
             )
 
-        self._zarr = zarr.open_group(self._path, mode="r", storage_options=fs_kwargs)
+        store = self._fs.get_mapper(self._path)  # type: ignore[attr-defined]
+        self._zarr = zarr.open_group(store=store, mode="r")
 
         self._multiscales_metadata = self._zarr.attrs.get("ome", {}).get(
             "multiscales"
@@ -85,15 +87,16 @@ class Reader(reader.Reader):
     def _is_supported_image(
         fs: AbstractFileSystem, path: str, fs_kwargs: Dict[str, Any], **kwargs: Any
     ) -> bool:
-        # Warn users who are reading from s3 with no storage options
-        if isinstance(fs, S3FileSystem) and fs_kwargs == {}:
+        if isinstance(fs, S3FileSystem) and not fs_kwargs:
             warnings.warn(
-                "Warning: you are reading a S3 file without specifying fs_kwargs, "
-                "Consider providing fs_kwargs (e.g., {{'anon': True}} for public s3)"
+                "Warning: reading from S3 without fs_kwargs. "
+                "Consider providing fs_kwargs (e.g., {'anon': True} for public S3) "
                 "to ensure accurate reading."
             )
+
         try:
-            zarr.open_group(path, mode="r", storage_options=fs_kwargs)
+            store = fs.get_mapper(path)
+            zarr.open_group(store=store, mode="r")
             return True
         except Exception:
             return False
