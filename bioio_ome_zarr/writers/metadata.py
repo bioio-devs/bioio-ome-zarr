@@ -202,10 +202,7 @@ def _build_ngff_v04(p: MetadataParams) -> Tuple[List[Dict[str, Any]], Dict[str, 
     datasets: List[Dict[str, Any]] = []
     for lvl in range(len(p.level_shapes)):
         scale_vec: List[float] = []
-        for i, ax_type in enumerate(p.axes.types):
-            if ax_type != "space":
-                scale_vec.append(1.0)
-                continue
+        for i in range(len(p.axes.names)):
             base = float(p.axes.scales[i] if i < len(p.axes.scales) else 1.0)
             if lvl == 0 or p.dataset_scales is None:
                 scale_vec.append(base)
@@ -277,10 +274,7 @@ def _build_ngff_v05(p: MetadataParams) -> Dict[str, Any]:
     datasets: List[Dict[str, Any]] = []
     for lvl in range(len(p.level_shapes)):
         scale_vec: List[float] = []
-        for i, ax_type in enumerate(p.axes.types):
-            if ax_type != "space":
-                scale_vec.append(1.0)
-                continue
+        for i in range(len(p.axes.names)):
             base = float(p.axes.scales[i] if i < len(p.axes.scales) else 1.0)
             if lvl == 0 or p.dataset_scales is None:
                 scale_vec.append(base)
