@@ -64,7 +64,7 @@ data = np.random.randint(0, 255, size=(64, 64), dtype=np.uint8)
 
 writer = OMEZarrWriter(
     store="basic.zarr",
-    shape=data.shape,   # (Y, X)
+    level_shapes=(64, 64),   # (Y, X)
     dtype=data.dtype,
 )
 
@@ -72,79 +72,75 @@ writer = OMEZarrWriter(
 writer.write_full_volume(data)
 ```
 
-### Full writer parameters and API
-
-Below is a reference of the `OMEZarrWriter` parameters, For complete details, see the constructor signature.
-
-| Parameter                 | Type                                            | Description                                                                                                                                                              |
-| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **store**                 | `str` or `zarr.storage.StoreLike`               | Filesystem path, URL (via `fsspec`), or Store-like object for the root group.                                                                                            |
-| **shape**                 | `Sequence[int]`                               | Shape of the highest‑resolution (level‑0) image, e.g., `(1, 1, 4, 64, 64)`.                                                                                                |
-| **dtype**                 | `np.dtype` or `str`                             | NumPy dtype for the on‑disk array (e.g., `uint8`, `uint16`).                                                                                                             |
-| **scale**                 | `Sequence[Sequence[float]]` or `None`       | Per‑level, per‑axis *relative sizes* vs. level‑0. Example: `((1,1,0.5,0.5,0.5), (1,1,0.25,0.25,0.25))` creates two lower‑res levels. If `None`, only level‑0 is written. |
-| **chunk\_shape**          | `Sequence[int]` or `Sequence[Sequence[int]]]` or `None`         | Chunk shape per level. Example: ((1, 1, 1, 64, 64), (1, 1, 1, 32, 32))If `None`, a suggested ≈16 MiB chunk is derived for v3; v2 applies a legacy per‑level policy. Also accepts a single shape to use across all levels.                                                    |
-| **shard\_shape**         | `Sequence[int]` or `Sequence[Sequence[int]]]` or `None`                     |             **Zarr v3 only.** Either: a single N-dim sequence applied to all levels, or a per-level sequence-of-sequences.                                                                                                         |
-| **compressor**            | `BloscCodec` or `numcodecs.abc.Codec` or `None` | Compression codec. v2: `numcodecs.Blosc`; v3: `zarr.codecs.BloscCodec`.                                                                                                  |
-| **zarr\_format**          | `Literal[2, 3]`                                 | Target Zarr format — `2` (NGFF 0.4) or `3` (NGFF 0.5).    Default `3`                                                                                                               |
-| **image\_name**           | `str` or `None`                                 | Name used in multiscales metadata. Default: `"Image"`.                                                                                                                   |
-| **channels**              | `list[Channel]` or `None`                       | OMERO‑style channel metadata.                                                                                                             |
-| **rdefs**                 | `dict` or `None`                                | OMERO rdef defaults                                                                                                            |
-| **creator\_info**         | `dict` or `None`                                | Optional creator block stored in metadata (v0.5).                                                                                                                        |
-| **root\_transform**       | `dict[str, Any]` or `None`                      | Optional multiscale root coordinate transform.                                                                                                                           |
-| **axes\_names**           | `list[str]` or `None`                           | Names of each axis. Defaults to the last N of `["t", "c", "z", "y", "x"]`.                                                                                               |
-| **axes\_types**           | `list[str]` or `None`                           | Axis types. Defaults: `["time", "channel", "space", …]`.                                                                                                                 |
-| **axes\_units**           | `list[str or None]` or `None`                   | Physical units for each axis (e.g., `"micrometer"`).                                                                                                                     |
-| **physical\_pixel\_size** | `list[float]` or `None`                         | Physical scale at level‑0 for each axis.                                                                                                                                 |
-
-
-**Methods**
-- `write_full_volume(input_data: np.ndarray | dask.array.Array) -> None`  
-  Write level‑0 (and all pyramid levels) from a full array. If a NumPy array is passed, it’s wrapped as Dask using level‑0 chunking.
-
-- `write_timepoints(source: Reader | np.ndarray | dask.array.Array, *, channel_indexes: list[int] | None = None, tbatch: int = 1) -> None`  
-  Stream writes along the **T** axis in batches. Writer and source axes must match by set (order handled internally). Spatial axes are downsampled for lower levels; **T** and **C** are preserved.
-
-- `preview_metadata() -> dict[str, Any]`  
-  Returns the exact NGFF metadata dict(s) that will be persisted, without writing.
-
----
-
-### Creating a writer (v3 with one extra resolution level)
+#### 5D (TCZYX), with one extra resolution level
 
 ```python
 from bioio_ome_zarr.writers import OMEZarrWriter, Channel
 import numpy as np
 
-shape = (2, 3, 4, 8, 8)  # (T, C, Z, Y, X)
-data = np.random.randint(0, 255, size=shape, dtype=np.uint8)
+level_shapes = [
+    (2, 3, 4, 256, 256),  # L0 full res
+    (2, 3, 4, 128, 128),  # L1 downsampled Y/X by 2
+]
 
-channels = [Channel(label=f"c{i}", color="FF0000") for i in range(shape[1])]
+data = np.random.randint(0, 255, size=level_shapes[0], dtype=np.uint8)
+channels = [Channel(label=f"c{i}", color="FF0000") for i in range(data.shape[1])]
 
 writer = OMEZarrWriter(
     store="output.zarr",
-    shape=shape,
+    level_shapes=level_shapes,
     dtype=data.dtype,
     zarr_format=3,  # 2 for Zarr v2
-    scale=((1, 1, 0.5, 0.5, 0.5),),  # add level at half Z/Y/X
     channels=channels,
     axes_names=["t", "c", "z", "y", "x"],
     axes_types=["time", "channel", "space", "space", "space"],
     axes_units=[None, None, "micrometer", "micrometer", "micrometer"],
 )
 
-# Write the entire volume
 writer.write_full_volume(data)
 ```
+
+### Full writer parameters and API
+
+| Parameter               | Type                                                      | Description                                                                                                                                                 |                          |
+| ----------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| **store**               | `str` or `zarr.storage.StoreLike`                         | Filesystem path, fsspec URL, or Store-like for the root group.                                                                                              |                          |
+| **level_shapes**        | `Sequence[int]` **or** `Sequence[Sequence[int]]`          | Either a single N‑D shape (one level) **or** an explicit per‑level list of shapes (level 0 first). Examples above.                                          |                          |
+| **dtype**               | `np.dtype` or `str`                                       | On‑disk dtype (e.g., `uint8`, `uint16`).                                                                                                                    |                          |
+| **chunk_shape**         | `Sequence[int]` or `Sequence[Sequence[int]]` or `None`    | Chunk shape: single (applied to all levels) or per‑level. If `None`, a ≈16 MiB chunk is suggested per level via `multiscale_chunk_size_from_memory_target`. |                          |
+| **shard_shape**         | `Sequence[int]` or `Sequence[Sequence[int]]` or `None`    | **Zarr v3 only.** Single or per‑level shard shapes. Each shard dim must be an integer multiple of the corresponding chunk dim.                              |                          |
+| **compressor**          | `BloscCodec` (v3) or `numcodecs.abc.Codec` (v2) or `None` | Compression codec. Defaults to zstd + bitshuffle.                                                                                                           |                          |
+| **zarr_format**         | `Literal[2,3]`                                            | Target Zarr format – `2` (NGFF 0.4) or `3` (NGFF 0.5). Default `3`.                                                                                         |                          |
+| **image_name**          | `str` or `None`                                           | Name used in multiscales metadata. Default: `"Image"`.                                                                                                      |                          |
+| **channels**            | `list[Channel]` or `None`                                 | OMERO‑style channel metadata.                                                                                                                               |                          |
+| **rdefs**               | `dict` or `None`                                          | OMERO rendering defaults.                                                                                                                                   |                          |
+| **creator_info**        | `dict` or `None`                                          | Optional creator block (NGFF 0.5).                                                                                                                          |                          |
+| **root_transform**      | `dict[str, Any]` or `None`                                | Optional transform placed at multiscale root.                                                                                                               |                          |
+| **axes_names**          | `list[str]` or `None`                                     | Axis names; defaults to the last N of `["t","c","z","y","x"]`.                                                                                              |                          |
+| **axes_types**          | `list[str]` or `None`                                     | Axis types; defaults to `["time","channel","space", …]`.                                                                                                    |                          |
+| **axes_units**          | `list[str]`or`None`                                       | Physical units per axis. |
+| **physical_pixel_size** | `list[float]` or `None`                                   | Level‑0 physical scale per axis.                                                                                                                            |                          |
+
+**Methods**
+
+* `write_full_volume(input_data: np.ndarray | dask.array.Array) -> None`
+  Write level‑0 and all declared pyramid levels. NumPy arrays are wrapped into Dask using level‑0 chunks.
+
+* `write_timepoints(data: np.ndarray | dask.array.Array, *, start_T_src=0, start_T_dest=0, total_T: int | None = None) -> None`
+  Stream along the **T** axis from `data` into the store. Spatial axes are downsampled for lower levels; **T**/**C** are preserved.
+
+* `preview_metadata() -> dict[str, Any]`
+  Returns the NGFF metadata dict(s) that would be written (no IO).
 
 ### Writing a full volume (NumPy or Dask)
 
 ```python
-# NumPy array is accepted and will be wrapped into Dask automatically
+# NumPy (wrapped automatically)
 writer.write_full_volume(data)
 
-# Or with a Dask array if you already have one
+# Or pass an explicit Dask array
 import dask.array as da
-writer.write_full_volume(da.from_array(data, chunks=(1, 1, 1, 8, 8)))
+writer.write_full_volume(da.from_array(data, chunks=(1, 1, 1, 64, 64)))
 ```
 
 ### Writing timepoints in batches (streaming along T)
@@ -188,10 +184,9 @@ chunk_shape = (
 )
 writer = OMEZarrWriter(
     store="custom_chunks.zarr",
-    shape=(1, 1, 2, 256, 256),
+    level_shapes=[(1, 1, 2, 256, 256), (1, 1, 2, 128, 128)],
     dtype="uint16",
     zarr_format=3,
-    scale=((1, 1, 0.5, 0.5, 0.5),),
     chunk_shape=chunk_shape,
 )
 
@@ -200,19 +195,18 @@ arr = np.random.randint(0, 65535, size=(1, 1, 2, 256, 256), dtype=np.uint16)
 writer.write_full_volume(arr)
 ```
 
-### Sharded writes (v3 only)
+### Sharded arrays (v3 only)
 
 ```python
 from zarr.codecs import BloscCodec, BloscShuffle
 
 writer = OMEZarrWriter(
     store="sharded_v3.zarr",
-    shape=(1, 1, 16, 1024, 1024),
+    level_shapes=[(1, 1, 16, 1024, 1024), (1, 1, 16, 512, 512)],
     dtype="uint8",
     zarr_format=3,
-    scale=((1, 1, 0.5, 0.5, 0.5),),
-    chunk_shape = (1,1,1,128,128)
-    shard_shape=[(1,1,1,256,256),(1,1,1,256,256)], # define per level shard shape
+    chunk_shape=[(1, 1, 1, 128, 128),(1, 1, 1, 128, 128)],
+    shard_shape=[(1, 1, 1, 256, 256), (1, 1, 1, 256, 256)],
     compressor=BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.bitshuffle),
 )
 
@@ -228,11 +222,12 @@ import numcodecs
 
 writer = OMEZarrWriter(
     store="target_v2.zarr",
-    shape=(2, 1, 4, 256, 256),
+    level_shapes=[(2, 1, 4, 256, 256), (2, 1, 4, 128, 128)],
     dtype="uint8",
     zarr_format=2,  # write NGFF 0.4
-    scale=((1, 1, 0.5, 0.5, 0.5), (1, 1, 0.25, 0.25, 0.25)),
-    compressor=numcodecs.Blosc(cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE),
+    compressor=numcodecs.Blosc(
+        cname="zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE
+    ),
 )
 
 writer.write_full_volume(
@@ -246,7 +241,7 @@ writer.write_full_volume(
 # Requires creds for private buckets; public can be anonymous
 writer = OMEZarrWriter(
     store="s3://my-bucket/path/to/out.zarr",
-    shape=(1, 2, 8, 2048, 2048),
+    level_shapes=(1, 2, 8, 2048, 2048),  # single level (TCZYX), no pyramid
     dtype="uint16",
     zarr_format=3,
 )
@@ -256,27 +251,8 @@ writer.write_full_volume(
 )
 ```
 
-### Add a root transform and preview metadata
+---
 
-```python
-writer = OMEZarrWriter(
-    store="with_transform.zarr",
-    shape=(1, 1, 1, 128, 128),
-    dtype="uint8",
-    zarr_format=3,
-    root_transform={"type": "scale", "scale": [1.0, 1.0, 1.0, 0.1, 0.1]},
-)
-# preview metadata (no disk write)
-md = writer.preview_metadata()
-print(md)
-
-# Write file 
-writer.write_full_volume(
-    np.random.randint(0, 255, size=(1, 1, 1, 128, 128), dtype=np.uint8)
-)
-
-
-```
 ### Writer Utility Functions
 
 **`multiscale_chunk_size_from_memory_target(level_shapes, dtype, memory_target) -> list[tuple[int, ...]]`**  
