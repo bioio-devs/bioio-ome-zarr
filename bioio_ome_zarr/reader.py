@@ -106,13 +106,21 @@ class Reader(reader.Reader):
         cls, image: types.PathLike, fs_kwargs: Dict[str, Any] = {}, **kwargs: Any
     ) -> bool:
         if isinstance(image, (str, Path)):
-            return cls._is_supported_image(
-                None, str(Path(image).resolve()), fs_kwargs, **kwargs
+            fs, path = io.pathlike_to_fs(
+                image,
+                enforce_exists=False,
+                fs_kwargs=fs_kwargs,
             )
-        else:
-            return reader.Reader.is_supported_image(
-                cls, image, fs_kwargs=fs_kwargs, **kwargs
-            )
+
+            # io.pathlike_to_fs trims s3 URLs; keep the original full URL
+            if isinstance(fs, S3FileSystem):
+                path = str(image)
+
+            return cls._is_supported_image(fs, path, fs_kwargs=fs_kwargs, **kwargs)
+
+        return reader.Reader.is_supported_image(
+            cls, image, fs_kwargs=fs_kwargs, **kwargs
+        )
 
     @property
     def scenes(self) -> Tuple[str, ...]:
