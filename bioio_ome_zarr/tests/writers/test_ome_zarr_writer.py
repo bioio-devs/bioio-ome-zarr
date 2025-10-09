@@ -327,7 +327,7 @@ def test_v3_sharding_and_chunking(
             ["t", "c", "z", "y", "x"],
             ["time", "channel", "space", "space", "space"],
             [None, None, None, "micrometer", "micrometer"],
-            [1.0, 1.0, 1.0, 0.5, 0.5],
+            [2.0, 1.0, 1.0, 0.5, 0.5],
             {
                 "label": "Ch0",
                 "color": "FF0000",
