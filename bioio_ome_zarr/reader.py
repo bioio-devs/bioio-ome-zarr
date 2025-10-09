@@ -273,12 +273,6 @@ class Reader(reader.Reader):
             The elementwise product of the global and dataset-specific scales.
         """
         multiscales = self._multiscales_metadata[self._current_scene_index]
-
-        if "coordinateTransformations" not in multiscales:
-            log.warning(
-                "No overall 'coordinateTransformations' found; "
-                "defaulting overall scale to 1.0 for each dim"
-            )
         overall_scale = multiscales.get(
             "coordinateTransformations", [{"scale": [1.0] * len(dims)}]
         )[0]["scale"]
