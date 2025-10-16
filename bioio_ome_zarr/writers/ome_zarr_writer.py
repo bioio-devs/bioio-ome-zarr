@@ -361,26 +361,40 @@ class OMEZarrWriter:
         """
         if not self._initialized:
             self._initialize()
-        base = (
+
+        cur = (
             input_data
             if isinstance(input_data, da.Array)
             else da.from_array(input_data, chunks=self.datasets[0].chunks)
         )
 
         expected_shape = tuple(self.level_shapes[0])
-        if tuple(int(s) for s in base.shape) != expected_shape:
+        if tuple(int(s) for s in cur.shape) != expected_shape:
             raise ValueError(
                 "write_full_volume: input shape does not match level-0 shape. "
-                f"Got {tuple(int(s) for s in base.shape)} vs expected {expected_shape}."
+                f"Got {tuple(int(s) for s in cur.shape)} vs expected {expected_shape}."
             )
 
-        # Store each level (downsampled with nearest-neighbor for parity)
+        ops = []
         for level_index, level_shape in enumerate(self.level_shapes):
-            src = base if level_index == 0 else resize(base, level_shape, order=0)
+            if level_index > 0:
+                # Iterative downsample from previous level
+                cur = resize(cur, tuple(level_shape), order=0)
+
+            # Align dask to destination chunking
+            tgt_chunks = self.datasets[level_index].chunks
+            src = cur if cur.chunks == tgt_chunks else cur.rechunk(tgt_chunks)
+
+            # lazily add
             if self.zarr_format == 2:
-                da.to_zarr(src, self.datasets[level_index])
+                ops.append(da.to_zarr(src, self.datasets[level_index], compute=False))
             else:
-                da.store(src, self.datasets[level_index], lock=True)
+                ops.append(
+                    da.store(src, self.datasets[level_index], lock=True, compute=False)
+                )
+
+        # compute and let dask optimize
+        da.compute(*ops)
 
     def write_timepoints(
         self,
@@ -482,31 +496,56 @@ class OMEZarrWriter:
             for i in range(self.ndim)
         )
 
+        # Build compute graph across all levels, then compute once.
+        ops = []
+        cur = batch_arr
         for level_index in range(self.num_levels):
-            if level_index == 0:
-                level_block = batch_arr
-            else:
+            if level_index > 0:
                 nextshape = list(self.level_shapes[level_index])
                 nextshape[axis_t] = total_T
-                level_block = resize(
-                    batch_arr,
-                    tuple(nextshape),
-                    order=0,
-                ).astype(batch_arr.dtype)
+                cur = resize(cur, tuple(nextshape), order=0).astype(cur.dtype)
 
-            if self.zarr_format == 2:
-                da.to_zarr(
-                    level_block,
-                    self.datasets[level_index],
-                    region=region_tuple,
+            # Align to target chunks
+            tgt_chunks = self.datasets[level_index].chunks
+            src = cur if cur.chunks == tgt_chunks else cur.rechunk(tgt_chunks)
+
+            # Decide if this region is a "full array" for THIS level
+            level_shape = self.level_shapes[level_index]
+
+            def _is_full_slice(sl: slice, dim: int) -> bool:
+                start_ok = (sl.start is None) or (sl.start == 0)
+                stop_ok = (sl.stop is None) or (sl.stop == dim)
+                step_ok = (sl.step is None) or (sl.step == 1)
+                return start_ok and stop_ok and step_ok
+
+            is_full_region = True
+            for i, sl in enumerate(region_tuple):
+                if sl == slice(None):
+                    continue
+                if not _is_full_slice(sl, level_shape[i]):
+                    is_full_region = False
+                    break
+
+            if self.zarr_format == 2 and is_full_region:
+                ops.append(
+                    da.to_zarr(
+                        src,
+                        self.datasets[level_index],
+                        compute=False,
+                    )
                 )
             else:
-                da.store(
-                    level_block,
-                    self.datasets[level_index],
-                    regions=region_tuple,
-                    lock=True,
+                ops.append(
+                    da.store(
+                        src,
+                        self.datasets[level_index],
+                        regions=[region_tuple],
+                        lock=True,
+                        compute=False,
+                    )
                 )
+        # compute and let dask optimize
+        da.compute(*ops)
 
     # -----------------
     # Internal plumbing
