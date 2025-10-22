@@ -509,29 +509,13 @@ class OMEZarrWriter:
             tgt_chunks = self.datasets[level_index].chunks
             src = cur if cur.chunks == tgt_chunks else cur.rechunk(tgt_chunks)
 
-            # Decide if this region is a "full array" for THIS level
-            level_shape = self.level_shapes[level_index]
-
-            def _is_full_slice(sl: slice, dim: int) -> bool:
-                start_ok = (sl.start is None) or (sl.start == 0)
-                stop_ok = (sl.stop is None) or (sl.stop == dim)
-                step_ok = (sl.step is None) or (sl.step == 1)
-                return start_ok and stop_ok and step_ok
-
-            is_full_region = True
-            for i, sl in enumerate(region_tuple):
-                if sl == slice(None):
-                    continue
-                if not _is_full_slice(sl, level_shape[i]):
-                    is_full_region = False
-                    break
-
-            if self.zarr_format == 2 and is_full_region:
+            if self.zarr_format == 2:
                 ops.append(
                     da.to_zarr(
                         src,
                         self.datasets[level_index],
                         compute=False,
+                        region=region_tuple,
                     )
                 )
             else:
@@ -539,7 +523,7 @@ class OMEZarrWriter:
                     da.store(
                         src,
                         self.datasets[level_index],
-                        regions=[region_tuple],
+                        regions=region_tuple,
                         lock=True,
                         compute=False,
                     )
