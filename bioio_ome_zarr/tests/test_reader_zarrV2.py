@@ -174,7 +174,7 @@ from .conftest import LOCAL_RESOURCES_DIR
             (1.0, 8.0, 8.0),
         ),
         pytest.param(
-            "bioformats_v2.zarr",
+            "bioformats_v2",
             None,
             None,
             None,
