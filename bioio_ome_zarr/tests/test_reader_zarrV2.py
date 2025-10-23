@@ -173,6 +173,22 @@ from .conftest import LOCAL_RESOURCES_DIR
             ["Channel:0"],
             (1.0, 8.0, 8.0),
         ),
+        pytest.param(
+            "bioformats_v2.zarr",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            marks=pytest.mark.xfail(
+                raises=exceptions.UnsupportedFileFormatError,
+                reason="(bioformats2raw.layout) not supported",
+            ),
+        ),
     ],
 )
 def test_ome_zarr_reader(
