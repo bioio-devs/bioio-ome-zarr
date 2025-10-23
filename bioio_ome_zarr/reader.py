@@ -104,8 +104,10 @@ class Reader(reader.Reader):
                     Reader.__name__,
                     path,
                     (
-                        "Detected transitional layout 'bioformats2raw.layout'. "
-                        "BioIO does *not* support these transitional formats."
+                        "Detected transitional layout metadata key "
+                        "'bioformats2raw.layout'. This layout describes multiple "
+                        "image series, not a single image. BioIO does *not* support "
+                        "reading stores using this format."
                     ),
                 )
 
