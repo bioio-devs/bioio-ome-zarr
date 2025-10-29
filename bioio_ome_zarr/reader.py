@@ -63,12 +63,8 @@ class Reader(reader.Reader):
         if isinstance(self._fs, S3FileSystem):
             self._path = str(image)
 
-        if not self._is_supported_image(self._fs, self._path, fs_kwargs=fs_kwargs):
-            raise exceptions.UnsupportedFileFormatError(
-                self.__class__.__name__,
-                self._path,
-                "Could not parse a Zarr store at the provided path.",
-            )
+        # Validate the store – this will raise if unsupported
+        self._is_supported_image(fs=self._fs, path=self._path, fs_kwargs=fs_kwargs)
 
         store = self._fs.get_mapper(self._path)  # type: ignore[attr-defined]
         self._zarr = zarr.open_group(store=store, mode="r")
@@ -96,10 +92,33 @@ class Reader(reader.Reader):
 
         try:
             store = fs.get_mapper(path)
-            zarr.open_group(store=store, mode="r")
+            group = zarr.open_group(store=store, mode="r")
+            attrs = group.attrs.asdict()
+
+            # Check for transitional metadata key
+            if ("bioformats2raw.layout" in attrs) or (
+                isinstance(attrs.get("ome"), dict)
+                and "bioformats2raw.layout" in attrs["ome"]
+            ):
+                raise exceptions.UnsupportedFileFormatError(
+                    Reader.__name__,
+                    path,
+                    (
+                        "Detected transitional layout metadata key "
+                        "'bioformats2raw.layout'. This layout describes multiple "
+                        "image series, not a single image. BioIO does *not* support "
+                        "reading stores using this format."
+                    ),
+                )
+
             return True
-        except Exception:
-            return False
+
+        except Exception as e:
+            raise exceptions.UnsupportedFileFormatError(
+                Reader.__name__,
+                path,
+                f"Could not parse a Zarr store at the provided path: {e}",
+            ) from e
 
     @classmethod
     def is_supported_image(
@@ -116,7 +135,9 @@ class Reader(reader.Reader):
             if isinstance(fs, S3FileSystem):
                 path = str(image)
 
-            return cls._is_supported_image(fs, path, fs_kwargs=fs_kwargs, **kwargs)
+            return cls._is_supported_image(
+                fs=fs, path=path, fs_kwargs=fs_kwargs, **kwargs
+            )
 
         return reader.Reader.is_supported_image(
             cls, image, fs_kwargs=fs_kwargs, **kwargs
