@@ -361,12 +361,18 @@ class OMEZarrWriter:
         """
         if not self._initialized:
             self._initialize()
-
         base = (
             input_data
             if isinstance(input_data, da.Array)
             else da.from_array(input_data, chunks=self.datasets[0].chunks)
         )
+
+        expected_shape = tuple(self.level_shapes[0])
+        if tuple(int(s) for s in base.shape) != expected_shape:
+            raise ValueError(
+                "write_full_volume: input shape does not match level-0 shape. "
+                f"Got {tuple(int(s) for s in base.shape)} vs expected {expected_shape}."
+            )
 
         # Store each level (downsampled with nearest-neighbor for parity)
         for level_index, level_shape in enumerate(self.level_shapes):
@@ -410,28 +416,60 @@ class OMEZarrWriter:
         if "t" not in writer_axes:
             raise ValueError("write_timepoints() requires a 'T' axis.")
         axis_t = writer_axes.index("t")
+
         arr = (
             da.from_array(data, chunks="auto") if isinstance(data, np.ndarray) else data
         )
+
+        # Validate ndim & non-T dims
         if arr.ndim != self.ndim:
             raise ValueError(
-                f"Array ndim ({arr.ndim}) must match writer.ndim ({self.ndim})."
+                f"write_timepoints: array ndim ({arr.ndim}) "
+                f"must match writer.ndim ({self.ndim})."
             )
+        level0 = tuple(self.level_shapes[0])
+        for ax in range(self.ndim):
+            if ax == axis_t:
+                continue
+            got, exp = int(arr.shape[ax]), int(level0[ax])
+            if got != exp:
+                raise ValueError(
+                    "write_timepoints: non-T axes must match destination "
+                    f"level-0 shape. Axis {ax}: got {got}, expected {exp}."
+                )
 
         src_T = int(arr.shape[axis_t])
-        dst_T = int(self.level_shapes[0][axis_t])
-        if start_T_src >= src_T or start_T_dest >= dst_T:
-            return
+        dst_T = int(level0[axis_t])
 
+        # Validate starts
+        if not (0 <= start_T_src < src_T):
+            raise ValueError(
+                f"write_timepoints: start_T_src ({start_T_src}) "
+                f"out of range [0, {src_T})."
+            )
+        if not (0 <= start_T_dest < dst_T):
+            raise ValueError(
+                f"write_timepoints: start_T_dest ({start_T_dest}) "
+                f"out of range [0, {dst_T})."
+            )
+
+        # Validate total_T
         src_avail = src_T - start_T_src
         dst_avail = dst_T - start_T_dest
-        total_T = (
-            min(src_avail, dst_avail)
-            if total_T is None
-            else max(0, min(int(total_T), src_avail, dst_avail))
-        )
-        if total_T == 0:
-            return
+        total_T = min(src_avail, dst_avail) if total_T is None else int(total_T)
+        if total_T <= 0:
+            raise ValueError("write_timepoints: total_T must be > 0.")
+        if total_T > src_avail:
+            raise ValueError(
+                "write_timepoints: requested total_T exceeds available source "
+                f"timepoints from start_T_src. Requested {total_T}, "
+                f"available {src_avail}."
+            )
+        if total_T > dst_avail:
+            raise ValueError(
+                "write_timepoints: requested total_T exceeds available destination "
+                f"space from start_T_dest. Requested {total_T}, available {dst_avail}."
+            )
 
         # Source slice
         sel_src: List[slice] = [slice(None)] * self.ndim
