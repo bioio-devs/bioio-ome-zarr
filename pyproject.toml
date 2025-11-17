@@ -26,6 +26,7 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
     "bioio-base>=1.4.0",
+    "dask<2025.11.0", # Pinning due to warning moving to error level
     "fsspec[http]>=2022.8.0",
     "s3fs>=2023.9.0",
     "scikit-image!=0.23.0",
