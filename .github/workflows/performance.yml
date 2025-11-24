@@ -41,4 +41,3 @@ jobs:
         name: performance-results-${{ matrix.os }}
         path: "output.csv"
         if-no-files-found: error
-
