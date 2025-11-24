@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pytest
@@ -343,3 +343,75 @@ def test_ome_metadata(
 
     # Ensure the reader resets scene index
     assert reader.current_scene_index == 0
+
+
+@pytest.mark.parametrize(
+    "filename, expected_dims",
+    [
+        (
+            "s1_t7_c4_z3_Image_0.zarr",
+            {
+                "T": ("time", "millisecond", 1.0),
+                "C": ("channel", None, 1.0),
+                "Z": ("space", "micrometer", 1.0),
+                "Y": ("space", "micrometer", 1.0),
+                "X": ("space", "micrometer", 1.0),
+            },
+        ),
+        (
+            "dimension_handling_tyx.zarr",
+            {
+                "T": ("time", "millisecond", 1.0),
+                "C": (None, None, None),
+                "Z": (None, None, None),
+                "Y": ("space", "micrometer", 1.0),
+                "X": ("space", "micrometer", 1.0),
+            },
+        ),
+    ],
+)
+def test_dimension_properties_from_axes(
+    filename: str,
+    expected_dims: Dict[str, Tuple[Optional[str], Optional[str], Optional[float]]],
+) -> None:
+
+    # Arrange
+    uri = LOCAL_RESOURCES_DIR / filename
+    r = Reader(uri)
+
+    # Act
+    dp = r.dimension_properties
+    s = r.scale
+
+    dim_to_prop = {
+        "T": dp.T,
+        "C": dp.C,
+        "Z": dp.Z,
+        "Y": dp.Y,
+        "X": dp.X,
+    }
+    dim_to_scale_val = {
+        "T": s.T,
+        "C": s.C,
+        "Z": s.Z,
+        "Y": s.Y,
+        "X": s.X,
+    }
+
+    # Assert
+    for dim, (expected_type, expected_unit, expected_value) in expected_dims.items():
+
+        prop = dim_to_prop[dim]
+        scale_val = dim_to_scale_val[dim]
+
+        # Type and unit should match what we expect from NGFF axes (or None)
+        assert prop.type == expected_type
+        assert prop.unit == expected_unit
+
+        # Value should match scale.<dim> (or None)
+        if expected_value is None:
+            assert prop.value is None
+            assert scale_val is None
+        else:
+            assert prop.value == pytest.approx(expected_value)
+            assert scale_val == pytest.approx(expected_value)
