@@ -38,5 +38,7 @@ jobs:
     - name: Upload Performance Results
       uses: actions/upload-artifact@v5
       with:
+        name: performance-results-${{ matrix.os }}
         path: "output.csv"
         if-no-files-found: error
+
