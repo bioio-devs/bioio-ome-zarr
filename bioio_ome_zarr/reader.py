@@ -407,6 +407,41 @@ class Reader(reader.Reader):
         )
 
     @property
+    def dimension_properties(self) -> types.DimensionProperties:
+        """
+        Returns
+        -------
+        dimension_properties: DimensionProperties
+            Per-dimension properties for T, C, Z, Y, X.
+        """
+        base_dp = super().dimension_properties
+
+        multiscales = self._multiscales_metadata[self._current_scene_index]
+        axes = multiscales.get("axes") or []
+
+        # Update a single dimension based on matching NGFF axis "name"
+        def _update_for_dim(
+            dim_letter: str, current: types.DimensionProperty
+        ) -> types.DimensionProperty:
+            for ax in axes:
+                name = ax.get("name")
+                if name is not None and name.upper() == dim_letter:
+                    return types.DimensionProperty(
+                        value=current.value,
+                        type=ax.get("type", current.type),
+                        unit=ax.get("unit", current.unit),
+                    )
+            return current
+
+        return types.DimensionProperties(
+            T=_update_for_dim("T", base_dp.T),
+            C=_update_for_dim("C", base_dp.C),
+            Z=_update_for_dim("Z", base_dp.Z),
+            Y=_update_for_dim("Y", base_dp.Y),
+            X=_update_for_dim("X", base_dp.X),
+        )
+
+    @property
     def ome_metadata(self) -> OME:
         """
         Build multi-scene OME object with one Image per scene.
