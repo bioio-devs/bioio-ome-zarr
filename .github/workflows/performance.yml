@@ -19,7 +19,7 @@ jobs:
       contents: read    # This is required for actions/checkout
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with: 
         lfs: true # For test files
     - name: Set up Python
@@ -38,5 +38,6 @@ jobs:
     - name: Upload Performance Results
       uses: actions/upload-artifact@v5
       with:
+        name: performance-results-${{ matrix.os }}
         path: "output.csv"
         if-no-files-found: error
