@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pytest
-from bioio_base import dimensions, exceptions, test_utilities
+from bioio_base import dimensions, exceptions, test_utilities, types
 from ome_types import to_dict
 from zarr.core.group import GroupMetadata
 
@@ -264,30 +264,33 @@ def test_ome_metadata(
         (
             "s1_t7_c4_z3_Image_0_V3.zarr",
             {
-                "T": ("time", "millisecond", 1.0),
-                "C": ("channel", None, 1.0),
-                "Z": ("space", "micrometer", 1.0),
-                "Y": ("space", "micrometer", 1.0),
-                "X": ("space", "micrometer", 1.0),
+                "T": ("time", types.ureg.millisecond, 1.0),
+                # Channel present → type "channel" and default dimensionless unit
+                "C": ("channel", types.ureg.dimensionless, 1.0),
+                "Z": ("space", types.ureg.micrometer, 1.0),
+                "Y": ("space", types.ureg.micrometer, 1.0),
+                "X": ("space", types.ureg.micrometer, 1.0),
             },
         ),
         (
             "dimension_handling_tyx_V3.zarr",
             {
-                "T": ("time", "millisecond", 1.0),
+                "T": ("time", types.ureg.millisecond, 1.0),
+                # No C / Z axis in this store
                 "C": (None, None, None),
                 "Z": (None, None, None),
-                "Y": ("space", "micrometer", 1.0),
-                "X": ("space", "micrometer", 1.0),
+                "Y": ("space", types.ureg.micrometer, 1.0),
+                "X": ("space", types.ureg.micrometer, 1.0),
             },
         ),
     ],
 )
 def test_dimension_properties_from_axes(
     filename: str,
-    expected_dims: Dict[str, Tuple[Optional[str], Optional[str], Optional[float]]],
+    expected_dims: Dict[
+        str, Tuple[Optional[str], Optional[types.Unit], Optional[float]]
+    ],
 ) -> None:
-
     # Arrange
     uri = LOCAL_RESOURCES_DIR / filename
     r = Reader(uri)
@@ -312,19 +315,21 @@ def test_dimension_properties_from_axes(
     }
 
     # Assert
-    for dim, (expected_type, expected_unit, expected_value) in expected_dims.items():
-
+    for dim, (expected_type, expected_unit, expected_scale) in expected_dims.items():
         prop = dim_to_prop[dim]
         scale_val = dim_to_scale_val[dim]
 
-        # Type and unit should match what we expect from NGFF axes (or None)
+        # Type from NGFF axes (or None)
         assert prop.type == expected_type
-        assert prop.unit == expected_unit
 
-        # Value should match scale.<dim> (or None)
-        if expected_value is None:
-            assert prop.value is None
+        # Unit: either None or a specific unit from the shared registry
+        if expected_unit is None:
+            assert prop.unit is None
+        else:
+            assert prop.unit == expected_unit
+
+        # Scale value should match Scale.<dim> (or None)
+        if expected_scale is None:
             assert scale_val is None
         else:
-            assert prop.value == pytest.approx(expected_value)
-            assert scale_val == pytest.approx(expected_value)
+            assert scale_val == pytest.approx(expected_scale)

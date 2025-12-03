@@ -413,33 +413,83 @@ class Reader(reader.Reader):
         -------
         dimension_properties: DimensionProperties
             Per-dimension properties for T, C, Z, Y, X.
+
+            This augments the base Reader's DimensionProperties with NGFF
+            multiscales axis metadata, if present:
+
+            * axis["type"]  → DimensionProperty.type   (e.g. "space", "time", "channel")
+            * axis["unit"]  → DimensionProperty.unit   (parsed via types.ureg)
+
+            Only dimensions with an explicit NGFF axis definition are populated.
+            Dimensions without an axis entry are cleared to (type=None, unit=None).
+
+            Additionally, if a channel axis is present with no unit, this reader
+            assigns a default dimensionless unit for C.
         """
         base_dp = super().dimension_properties
 
         multiscales = self._multiscales_metadata[self._current_scene_index]
         axes = multiscales.get("axes") or []
 
-        # Update a single dimension based on matching NGFF axis "name"
-        def _update_for_dim(
-            dim_letter: str, current: types.DimensionProperty
-        ) -> types.DimensionProperty:
-            for ax in axes:
-                name = ax.get("name")
-                if name is not None and name.upper() == dim_letter:
-                    return types.DimensionProperty(
-                        value=current.value,
-                        type=ax.get("type", current.type),
-                        unit=ax.get("unit", current.unit),
-                    )
-            return current
+        axis_by_name = {}
+        for ax in axes:
+            name = ax.get("name")
+            if name is not None:
+                axis_by_name[name.upper()] = ax
 
-        return types.DimensionProperties(
-            T=_update_for_dim("T", base_dp.T),
-            C=_update_for_dim("C", base_dp.C),
-            Z=_update_for_dim("Z", base_dp.Z),
-            Y=_update_for_dim("Y", base_dp.Y),
-            X=_update_for_dim("X", base_dp.X),
+        def _from_axis(
+            dim_letter: str, base_prop: types.DimensionProperty
+        ) -> types.DimensionProperty:
+            """
+            Build a DimensionProperty for a single dim based on its NGFF axis.
+            """
+            ax = axis_by_name.get(dim_letter)
+            if ax is None:
+                # No axis defined for this dim → treat as absent
+                return types.DimensionProperty(type=None, unit=None)
+
+            axis_type = ax.get("type", base_prop.type)
+
+            unit = base_prop.unit
+            unit_str = ax.get("unit")
+            if unit_str is not None:
+                try:
+                    unit = types.ureg.Unit(unit_str)
+                except Exception as e:
+                    warnings.warn(
+                        f"Could not parse unit {unit_str!r} for axis "
+                        f"{ax.get('name')!r}: {e}. Leaving unit unset.",
+                        UserWarning,
+                    )
+
+            return types.DimensionProperty(
+                type=axis_type,
+                unit=unit,
+            )
+
+        dp = types.DimensionProperties(
+            T=_from_axis("T", base_dp.T),
+            C=_from_axis("C", base_dp.C),
+            Z=_from_axis("Z", base_dp.Z),
+            Y=_from_axis("Y", base_dp.Y),
+            X=_from_axis("X", base_dp.X),
         )
+
+        # If a channel axis exists and still has no unit → default to dimensionless.
+        # We check axis_by_name to ensure "C" is actually defined for this store.
+        if "C" in axis_by_name and dp.C.type == "channel" and dp.C.unit is None:
+            dp = types.DimensionProperties(
+                T=dp.T,
+                C=types.DimensionProperty(
+                    type=dp.C.type,
+                    unit=types.ureg.dimensionless,
+                ),
+                Z=dp.Z,
+                Y=dp.Y,
+                X=dp.X,
+            )
+
+        return dp
 
     @property
     def ome_metadata(self) -> OME:
