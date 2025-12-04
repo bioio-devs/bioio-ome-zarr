@@ -431,7 +431,7 @@ class Reader(reader.Reader):
         multiscales = self._multiscales_metadata[self._current_scene_index]
         axes = multiscales.get("axes") or []
 
-        axis_by_name = {}
+        axis_by_name: Dict[str, Dict[str, Any]] = {}
         for ax in axes:
             name = ax.get("name")
             if name is not None:
@@ -477,17 +477,26 @@ class Reader(reader.Reader):
 
         # If a channel axis exists and still has no unit → default to dimensionless.
         # We check axis_by_name to ensure "C" is actually defined for this store.
-        if "C" in axis_by_name and dp.C.type == "channel" and dp.C.unit is None:
-            dp = types.DimensionProperties(
-                T=dp.T,
-                C=types.DimensionProperty(
-                    type=dp.C.type,
-                    unit=types.ureg.dimensionless,
-                ),
-                Z=dp.Z,
-                Y=dp.Y,
-                X=dp.X,
-            )
+        if "C" in axis_by_name and dp.C.type == "channel":
+            if dp.C.unit is None:
+                dp = types.DimensionProperties(
+                    T=dp.T,
+                    C=types.DimensionProperty(
+                        type=dp.C.type,
+                        unit=types.ureg.dimensionless,
+                    ),
+                    Z=dp.Z,
+                    Y=dp.Y,
+                    X=dp.X,
+                )
+            elif dp.C.unit != types.ureg.dimensionless:
+                # Warn if C is ever assigned a non-dimensionless unit
+                warnings.warn(
+                    f"Channel axis has a non-dimensionless unit {dp.C.unit!r}. "
+                    "Channel dimensions should be unitless; this is likely a "
+                    "metadata error in the NGFF store.",
+                    UserWarning,
+                )
 
         return dp
 
