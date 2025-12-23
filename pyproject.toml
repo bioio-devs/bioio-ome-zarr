@@ -35,9 +35,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/BrianWhitneyAI/bioio-ome-zarr"
-"Bug Tracker" = "https://github.com/BrianWhitneyAI/bioio-ome-zarr/issues"
-"User Support" = "https://github.com/BrianWhitneyAI/bioio-ome-zarr/issues"
+Homepage = "https://github.com/bioio-devs/bioio-ome-zarr"
+"Bug Tracker" = "https://github.com/bioio-devs/bioio-ome-zarr/issues"
+"User Support" = "https://github.com/bioio-devs/bioio-ome-zarr/issues"
 
 # extra dependencies
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
