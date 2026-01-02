@@ -108,7 +108,7 @@ jobs:
     - name: Run Performance Benchmark
       run: just benchmark
     - name: Upload Performance Results
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         path: "output.csv"
         if-no-files-found: error
