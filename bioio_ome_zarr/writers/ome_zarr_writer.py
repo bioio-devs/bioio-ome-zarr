@@ -588,6 +588,7 @@ class OMEZarrWriter:
                         "name": "default",
                         "separator": "/",
                     },
+                    "dimension_names": list(self.axes.names),
                 }
                 # Per-level shards if provided (Zarr v3 only)
                 if self.shards_per_level is not None:

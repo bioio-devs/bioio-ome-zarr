@@ -4,9 +4,14 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import dask.array as da
 import numpy as np
+import ome_zarr_models
 import pytest
 import zarr
-from ngff_zarr.validate import validate
+from ngff_zarr.validate import validate as ngff_validate
+from ome_zarr_models.common.validation import (
+    check_array_path,
+    check_group_path,
+)
 
 from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import Channel, OMEZarrWriter
@@ -15,13 +20,34 @@ from bioio_ome_zarr.writers.utils import DimTuple
 from ..conftest import LOCAL_RESOURCES_DIR
 
 
-# Validation Helper
-def _validate_attrs_by_format(attrs: Dict[str, Any], zarr_format: int) -> None:
+def assert_valid_ome_zarr(
+    store: str,
+    *,
+    zarr_format: int = 3,
+    expect_levels: Optional[int] = None,
+) -> None:
+    """
+    Function that uses ngff_zarr and ome_zarr_models to
+    assess the validity of produced zarr files.
+    """
+    zgrp = zarr.open(store, mode="r")
+    attrs: Dict[str, Any] = zgrp.attrs.asdict()
+
+    # ---- ome-zarr-models structural validation ----
+    check_group_path(zgrp, "", expected_zarr_version=zarr_format)
+
+    if expect_levels is not None:
+        for idx in range(expect_levels):
+            check_array_path(zgrp, str(idx), expected_zarr_version=zarr_format)
+
+    ome_zarr_models.open_ome_zarr(zgrp)
+
+    # ---- ngff-zarr validation ----
     if zarr_format == 2:
-        validate(attrs, version="0.4", model="image", strict=False)
+        ngff_validate(attrs, version="0.4", model="image", strict=False)
         assert "multiscales" in attrs and "omero" in attrs
     else:
-        validate(attrs, version="0.5", model="image", strict=False)
+        ngff_validate(attrs, version="0.5", model="image", strict=False)
         assert "ome" in attrs and "multiscales" in attrs["ome"]
 
 
@@ -175,8 +201,6 @@ def test_write_pyramid(
         np.testing.assert_array_equal(np.squeeze(grp["1"][:]), literal_level1)
 
     attrs = grp.attrs.asdict()
-    _validate_attrs_by_format(attrs, zarr_format)
-
     if zarr_format == 2:
         assert len(attrs["multiscales"][0]["datasets"]) == len(level_shapes)
     else:
@@ -187,6 +211,10 @@ def test_write_pyramid(
     assert reader is not None
     assert len(reader.shape) >= len(level_shapes[0])
     assert reader.shape == level_shapes[0]
+
+    assert_valid_ome_zarr(
+        str(save_uri), expect_levels=len(level_shapes), zarr_format=zarr_format
+    )
 
 
 @pytest.mark.parametrize(
@@ -271,6 +299,12 @@ def test_write_timepoints_array(
     if expect_level1_literal is not None:
         np.testing.assert_array_equal(root["1"][:], expect_level1_literal)
 
+    assert_valid_ome_zarr(
+        str(out_store),
+        expect_levels=len(writer_level_shapes),
+        zarr_format=writer_zarr_format,
+    )
+
 
 @pytest.mark.parametrize(
     "level0_shape, chunk_size, shard_per_level",
@@ -315,6 +349,8 @@ def test_v3_sharding_and_chunking(
     assert arr.shape == level0_shape
     assert arr.chunks == chunk_size
     assert arr.shards == shard_per_level[0]
+
+    assert_valid_ome_zarr(store, expect_levels=1)
 
 
 @pytest.mark.parametrize(
@@ -399,6 +435,8 @@ def test_v3_metadata_against_reference(
     with open(uri, "r") as f:
         reference = json.load(f)
     assert generated["ome"] == reference["attributes"]["ome"]
+
+    assert_valid_ome_zarr(store_dir, expect_levels=len(level_shapes))
 
 
 @pytest.mark.parametrize(
