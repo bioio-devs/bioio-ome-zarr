@@ -8,10 +8,6 @@ import ome_zarr_models
 import pytest
 import zarr
 from ngff_zarr.validate import validate as ngff_validate
-from ome_zarr_models.common.validation import (
-    check_array_path,
-    check_group_path,
-)
 
 from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import Channel, OMEZarrWriter
@@ -24,7 +20,6 @@ def assert_valid_ome_zarr(
     store: str,
     *,
     zarr_format: int = 3,
-    expect_levels: Optional[int] = None,
 ) -> None:
     """
     Function that uses ngff_zarr and ome_zarr_models to
@@ -33,14 +28,13 @@ def assert_valid_ome_zarr(
     zgrp = zarr.open(store, mode="r")
     attrs: Dict[str, Any] = zgrp.attrs.asdict()
 
-    # ---- ome-zarr-models structural validation ----
-    check_group_path(zgrp, "", expected_zarr_version=zarr_format)
-
-    if expect_levels is not None:
-        for idx in range(expect_levels):
-            check_array_path(zgrp, str(idx), expected_zarr_version=zarr_format)
-
-    ome_zarr_models.open_ome_zarr(zgrp)
+    # ---- ome-zarr-models validation ----
+    if zarr_format == 2:
+        # NGFF v0.4
+        ome_zarr_models.v04.Image.from_zarr(zgrp)
+    else:
+        # NGFF v0.5
+        ome_zarr_models.v05.Image.from_zarr(zgrp)
 
     # ---- ngff-zarr validation ----
     if zarr_format == 2:
@@ -212,9 +206,7 @@ def test_write_pyramid(
     assert len(reader.shape) >= len(level_shapes[0])
     assert reader.shape == level_shapes[0]
 
-    assert_valid_ome_zarr(
-        str(save_uri), expect_levels=len(level_shapes), zarr_format=zarr_format
-    )
+    assert_valid_ome_zarr(str(save_uri), zarr_format=zarr_format)
 
 
 @pytest.mark.parametrize(
@@ -300,8 +292,7 @@ def test_write_timepoints_array(
         np.testing.assert_array_equal(root["1"][:], expect_level1_literal)
 
     assert_valid_ome_zarr(
-        str(out_store),
-        expect_levels=len(writer_level_shapes),
+        out_store,
         zarr_format=writer_zarr_format,
     )
 
@@ -350,7 +341,7 @@ def test_v3_sharding_and_chunking(
     assert arr.chunks == chunk_size
     assert arr.shards == shard_per_level[0]
 
-    assert_valid_ome_zarr(store, expect_levels=1)
+    assert_valid_ome_zarr(store)
 
 
 @pytest.mark.parametrize(
@@ -436,7 +427,7 @@ def test_v3_metadata_against_reference(
         reference = json.load(f)
     assert generated["ome"] == reference["attributes"]["ome"]
 
-    assert_valid_ome_zarr(store_dir, expect_levels=len(level_shapes))
+    assert_valid_ome_zarr(store_dir)
 
 
 @pytest.mark.parametrize(
