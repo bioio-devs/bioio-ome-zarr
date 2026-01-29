@@ -333,3 +333,24 @@ def test_dimension_properties_from_axes(
             assert scale_val is None
         else:
             assert scale_val == pytest.approx(expected_scale)
+
+
+def test_read_ome_metadata_channels_no_color() -> None:
+    import numpy as np
+    import zarr
+    from ome_zarr.io import parse_url
+    from ome_zarr.writer import write_image
+
+    data = np.zeros((2, 2, 2), dtype=np.uint8)
+    root = zarr.group(
+        store=parse_url(
+            LOCAL_RESOURCES_DIR / "test_ngff_channel_no_color.zarr", mode="w"
+        ).store
+    )
+    write_image(
+        image=data, group=root, axes="zyx", scaler=None, metadata=dict(foo="bar")
+    )
+
+    uri = LOCAL_RESOURCES_DIR / "test_ngff_channel_no_color.zarr"
+    reader = Reader(uri)
+    assert reader.ome_metadata.images[0].pixels.channels[0].name == "random"
