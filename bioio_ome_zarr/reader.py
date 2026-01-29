@@ -58,10 +58,7 @@ class Reader(reader.Reader):
             enforce_exists=False,
             fs_kwargs=fs_kwargs,
         )
-
-        # io.pathlike_to_fs clips s3 paths
-        if isinstance(self._fs, S3FileSystem):
-            self._path = str(image)
+        self._path = self._fs.unstrip_protocol(self._path)
 
         # Validate the store – this will raise if unsupported
         self._is_supported_image(fs=self._fs, path=self._path, fs_kwargs=fs_kwargs)
@@ -131,10 +128,7 @@ class Reader(reader.Reader):
                 fs_kwargs=fs_kwargs,
             )
 
-            # io.pathlike_to_fs trims s3 URLs; keep the original full URL
-            if isinstance(fs, S3FileSystem):
-                path = str(image)
-
+            path = fs.unstrip_protocol(path)
             return cls._is_supported_image(
                 fs=fs, path=path, fs_kwargs=fs_kwargs, **kwargs
             )
