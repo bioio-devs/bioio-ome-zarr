@@ -535,12 +535,18 @@ class Reader(reader.Reader):
                     contrast.append("Off")
                 if meta.get("inverted"):
                     contrast.append("inverted")
+                color = meta.get("color")
+                channel_args = dict()
+                if contrast:
+                    channel_args["contrast_method"] = contrast
+                if color is not None:
+                    channel_args["color"] = color
+
                 channels.append(
                     Channel(
                         id=f"Channel:{i}",
                         name=meta.get("label", f"Channel {i}"),
-                        color=meta.get("color"),
-                        contrast_method=contrast or None,
+                        **channel_args,
                     )
                 )
 

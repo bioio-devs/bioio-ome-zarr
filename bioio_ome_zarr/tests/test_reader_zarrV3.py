@@ -333,3 +333,9 @@ def test_dimension_properties_from_axes(
             assert scale_val is None
         else:
             assert scale_val == pytest.approx(expected_scale)
+
+
+def test_read_ome_metadata_channels_no_color() -> None:
+    uri = LOCAL_RESOURCES_DIR / "test_ngff_channel_no_color.zarr"
+    reader = Reader(uri)
+    assert reader.ome_metadata.images[0].pixels.channels[0].name == "random"
