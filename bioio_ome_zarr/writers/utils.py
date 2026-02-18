@@ -57,45 +57,6 @@ def resize(
     return output.rechunk(image.chunksize).astype(image.dtype)
 
 
-# LEGACY (Remove with V3 writer)
-def chunk_size_from_memory_target(
-    shape: Tuple[int, ...],
-    dtype: Union[str, np.dtype],
-    memory_target: int,
-    order: Optional[Sequence[str]] = None,
-) -> Tuple[int, ...]:
-    """
-    Suggest a chunk shape that fits within `memory_target` bytes.
-    - If `order` is None, assume the last N of ["T","C","Z","Y","X"].
-    - Spatial axes (Z/Y/X) start at full size; others start at 1.
-    - Halve all dims until under the target.
-    """
-    TCZYX = ["T", "C", "Z", "Y", "X"]
-    ndim = len(shape)
-
-    # Infer or validate axis ordering
-    if order is None:
-        if ndim <= len(TCZYX):
-            order = TCZYX[-ndim:]
-        else:
-            raise ValueError(f"No default for {ndim}-D shape; pass explicit `order`")
-    elif len(order) != ndim:
-        raise ValueError(f"`order` length {len(order)} != shape length {ndim}")
-    # Compute item size in bytes
-    itemsize = np.dtype(dtype).itemsize
-
-    # Build a mutable list of initial chunk sizes
-    chunk_list: List[int] = [
-        size if ax.upper() in ("Z", "Y", "X") else 1 for size, ax in zip(shape, order)
-    ]
-
-    # Halve dims until within memory target
-    while int(np.prod(chunk_list)) * itemsize > memory_target:
-        chunk_list = [max(s // 2, 1) for s in chunk_list]
-    # Return as an immutable tuple
-    return tuple(chunk_list)
-
-
 def add_zarr_level(
     existing_zarr: Union[str, Path],
     scale_factors: Tuple[float, float, float, float, float],  # (T, C, Z, Y, X)
@@ -115,7 +76,9 @@ def add_zarr_level(
     dtype = rdr.dtype
 
     new_shape = tuple(int(np.ceil(s * f)) for s, f in zip(src_shape, scale_factors))
-    chunks = chunk_size_from_memory_target(new_shape, dtype, 16 * 1024 * 1024)
+    chunks = multiscale_chunk_size_from_memory_target(
+        [new_shape], dtype, 16 * 1024 * 1024
+    )[0]
     store = LocalStore(str(existing_zarr))
     group = zarr.open_group(store=store, mode="a", zarr_format=2)
     new_idx = src_idx + 1

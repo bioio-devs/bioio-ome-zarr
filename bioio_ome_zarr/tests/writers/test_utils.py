@@ -1,8 +1,6 @@
 import pathlib
-from typing import Optional, Tuple, Union
 
 import numpy as np
-import pytest
 from dask import array as da
 
 from bioio_ome_zarr import Reader
@@ -10,54 +8,8 @@ from bioio_ome_zarr.writers import (
     Channel,
     OMEZarrWriter,
     add_zarr_level,
-    chunk_size_from_memory_target,
     resize,
 )
-
-
-@pytest.mark.parametrize(
-    "shape, dtype, target, expected",
-    [
-        # original 5D uint16 cases
-        ((1, 1, 1, 128, 128), np.uint16, 1024, (1, 1, 1, 16, 16)),
-        ((1, 1, 1, 127, 127), np.uint16, 1024, (1, 1, 1, 15, 15)),
-        ((1, 1, 1, 129, 129), np.uint16, 1024, (1, 1, 1, 16, 16)),
-        ((7, 11, 128, 128, 128), np.uint16, 1024, (1, 1, 8, 8, 8)),
-        # 2D uint8 (YX) with 1 KiB target
-        ((256, 256), np.uint8, 1024, (32, 32)),
-        # 3D uint8 (ZYX) with ~1 KiB target
-        ((10, 20, 30), np.uint8, 1000, (5, 10, 15)),
-        # 4D uint8 (CZYX) with 4 KiB target
-        ((2, 4, 64, 64), np.uint8, 4096, (1, 2, 32, 32)),
-        # 5D float32 (TCZYX) with 256 KiB target
-        ((1, 1, 64, 64, 64), np.float32, 256 * 1024, (1, 1, 32, 32, 32)),
-        # >5D without explicit order should xfail
-        pytest.param(
-            (1, 1, 1, 1, 1, 1),
-            np.uint8,
-            1024,
-            None,
-            marks=pytest.mark.xfail(
-                raises=ValueError,
-                strict=True,
-                reason="Shapes >5D without `order` must raise",
-            ),
-        ),
-    ],
-)
-def test_chunk_size_from_memory_target(
-    shape: Tuple[int, ...],
-    dtype: Union[str, np.dtype],
-    target: int,
-    expected: Optional[Tuple[int, ...]],
-) -> None:
-    """
-    Parameterized test for chunk_size_from_memory_target:
-      - Valid 2D–5D cases (various dtypes & sizes)
-      - >5D case xfails with ValueError when order=None
-    """
-    out = chunk_size_from_memory_target(shape, dtype, target)
-    assert out == expected
 
 
 def test_resize_simple() -> None:
