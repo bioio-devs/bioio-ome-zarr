@@ -1,6 +1,10 @@
 import pathlib
 
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import numpy as np
+import pytest
+import zarr
 from dask import array as da
 
 from bioio_ome_zarr import Reader
@@ -8,6 +12,7 @@ from bioio_ome_zarr.writers import (
     Channel,
     OMEZarrWriter,
     add_zarr_level,
+    apply_writer_metadata_edits,
     resize,
 )
 
@@ -67,3 +72,333 @@ def test_add_zarr_level_using_reader(tmp_path: pathlib.Path) -> None:
     expected = resize(da.from_array(data0), data1.shape, order=0).compute()
 
     assert np.array_equal(data1, expected), "Data mismatch after downsampling"
+
+
+@pytest.mark.parametrize(
+    "level_shapes, axes_names, axes_types, physical_pixel_size",
+    [
+        (
+            [(2, 4, 4), (2, 2, 2), (2, 1, 1)],  # TYX pyramid
+            ["t", "y", "x"],
+            ["time", "space", "space"],
+            [2.0, 0.5, 0.5],
+        ),
+    ],
+)
+def test_v2_edit_channel_label(
+    tmp_path: pathlib.Path,
+    level_shapes: List[Tuple[int, ...]],
+    axes_names: List[str],
+    axes_types: List[str],
+    physical_pixel_size: List[float],
+) -> None:
+    store = str(tmp_path / "v2_channel.zarr")
+    data = np.zeros(level_shapes[0], dtype=np.uint8)
+
+    # ARRANGE: Create Image
+    w = OMEZarrWriter(
+        store=store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=2,
+        axes_names=axes_names,
+        axes_types=axes_types,
+        physical_pixel_size=physical_pixel_size,
+        image_name="TEST",
+        channels=[Channel(label="Ch0", color="FF0000")],
+    )
+    w.write_full_volume(data)
+
+    # ACT: edit channel
+    apply_writer_metadata_edits(
+        store,
+        channels=[Channel(label="NewLabel", color="00FF00")],
+    )
+
+    # ASSERT:
+    rdr = Reader(store)
+    assert rdr.channel_names == ["NewLabel"]
+
+
+@pytest.mark.parametrize(
+    "level_shapes, old_axes_names, new_axes_names, new_axes_types",
+    [
+        (
+            [(2, 4, 4), (2, 2, 2)],
+            ["t", "y", "x"],
+            ["z", "y", "x"],
+            ["space", "space", "space"],
+        ),
+    ],
+)
+def test_v2_edit_axes(
+    tmp_path: pathlib.Path,
+    level_shapes: List[Tuple[int, ...]],
+    old_axes_names: List[str],
+    new_axes_names: List[str],
+    new_axes_types: List[str],
+) -> None:
+    store = str(tmp_path / "v2_axes.zarr")
+    data = np.zeros(level_shapes[0], dtype=np.uint8)
+
+    # ARRANGE: Create Image
+    w = OMEZarrWriter(
+        store=store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=2,
+        axes_names=old_axes_names,
+        axes_types=["time", "space", "space"],
+        image_name="TEST",
+    )
+    w.write_full_volume(data)
+
+    # ACT: change axes
+    apply_writer_metadata_edits(
+        store,
+        axes_names=new_axes_names,
+        axes_types=new_axes_types,
+    )
+
+    # ASSERT:
+    rdr = Reader(store)
+    assert rdr._get_ome_dims() == tuple(n.upper() for n in new_axes_names)
+
+    root = zarr.open_group(store, mode="r")
+    attrs = root.attrs.asdict()
+    axes = attrs["multiscales"][0]["axes"]
+    assert [a["type"] for a in axes] == new_axes_types
+
+
+@pytest.mark.parametrize(
+    "level_shapes, old_pps, new_pps",
+    [
+        ([(2, 4, 4), (2, 2, 2), (2, 1, 1)], [2.0, 0.5, 0.5], [4.0, 1.0, 1.0]),
+    ],
+)
+def test_v2_edit_physical_pixel_size(
+    tmp_path: pathlib.Path,
+    level_shapes: List[Tuple[int, ...]],
+    old_pps: List[float],
+    new_pps: List[float],
+) -> None:
+    store = str(tmp_path / "v2_pps.zarr")
+    data = np.zeros(level_shapes[0], dtype=np.uint8)
+
+    # ARRANGE: Create Image
+    w = OMEZarrWriter(
+        store=store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=2,
+        axes_names=["t", "y", "x"],
+        axes_types=["time", "space", "space"],
+        physical_pixel_size=old_pps,
+        image_name="TEST",
+    )
+    w.write_full_volume(data)
+
+    # ACTL: Update PPS
+    apply_writer_metadata_edits(store, physical_pixel_size=new_pps)
+
+    # ASSERT
+    root = zarr.open_group(store, mode="r")
+    ms0 = root.attrs.asdict()["multiscales"][0]
+    ds = ms0["datasets"]
+
+    scale0 = ds[0]["coordinateTransformations"][0]["scale"]
+    scale1 = ds[1]["coordinateTransformations"][0]["scale"]
+    scale2 = ds[2]["coordinateTransformations"][0]["scale"]
+
+    assert scale0 == new_pps
+
+    assert scale1[0] == pytest.approx(new_pps[0])
+    assert scale1[1] == pytest.approx(new_pps[1] * 2.0)
+    assert scale1[2] == pytest.approx(new_pps[2] * 2.0)
+
+    assert scale2[0] == pytest.approx(new_pps[0])
+    assert scale2[1] == pytest.approx(new_pps[1] * 4.0)
+    assert scale2[2] == pytest.approx(new_pps[2] * 4.0)
+
+
+@pytest.mark.parametrize(
+    "level_shapes, axes_names, axes_types, physical_pixel_size",
+    [
+        (
+            [(2, 4, 4), (2, 2, 2), (2, 1, 1)],
+            ["t", "y", "x"],
+            ["time", "space", "space"],
+            [2.0, 0.5, 0.5],
+        ),
+    ],
+)
+def test_v3_edit_channel_label(
+    tmp_path: pathlib.Path,
+    level_shapes: List[Tuple[int, ...]],
+    axes_names: List[str],
+    axes_types: List[str],
+    physical_pixel_size: List[float],
+) -> None:
+    store = str(tmp_path / "v3_channel.zarr")
+    data = np.zeros(level_shapes[0], dtype=np.uint8)
+
+    w = OMEZarrWriter(
+        store=store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=3,
+        axes_names=axes_names,
+        axes_types=axes_types,
+        physical_pixel_size=physical_pixel_size,
+        image_name="TEST",
+        channels=[Channel(label="Ch0", color="FF0000")],
+    )
+    w.write_full_volume(data)
+
+    # ACT
+    apply_writer_metadata_edits(
+        store,
+        channels=[Channel(label="NewLabel", color="00FF00")],
+    )
+
+    # ASSERT: Reader + raw attrs
+    rdr = Reader(store)
+    assert rdr.channel_names == ["NewLabel"]
+
+    root = zarr.open_group(store, mode="r")
+    attrs: Dict[str, Any] = root.attrs.asdict()
+    assert attrs["ome"]["omero"]["channels"][0]["label"] == "NewLabel"
+
+
+@pytest.mark.parametrize(
+    "level_shapes, old_axes_names, new_axes_names, new_axes_types",
+    [
+        (
+            [(2, 4, 4), (2, 2, 2)],
+            ["t", "y", "x"],
+            ["z", "y", "x"],
+            ["space", "space", "space"],
+        ),
+    ],
+)
+def test_v3_edit_axes_tyx_to_zyx(
+    tmp_path: pathlib.Path,
+    level_shapes: List[Tuple[int, ...]],
+    old_axes_names: List[str],
+    new_axes_names: List[str],
+    new_axes_types: List[str],
+) -> None:
+    store = str(tmp_path / "v3_axes.zarr")
+    data = np.zeros(level_shapes[0], dtype=np.uint8)
+
+    w = OMEZarrWriter(
+        store=store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=3,
+        axes_names=old_axes_names,
+        axes_types=["time", "space", "space"],
+        image_name="TEST",
+    )
+    w.write_full_volume(data)
+
+    # ACT
+    apply_writer_metadata_edits(
+        store,
+        axes_names=new_axes_names,
+        axes_types=new_axes_types,
+    )
+
+    # ASSERT: Reader sees new dims
+    rdr = Reader(store)
+    assert rdr._get_ome_dims() == tuple(n.upper() for n in new_axes_names)
+
+    root = zarr.open_group(store, mode="r")
+    attrs = root.attrs.asdict()
+    axes = attrs["ome"]["multiscales"][0]["axes"]
+    assert [a["name"] for a in axes] == new_axes_names
+    assert [a["type"] for a in axes] == new_axes_types
+
+
+@pytest.mark.parametrize(
+    "level_shapes, old_pps, new_pps",
+    [
+        ([(2, 4, 4), (2, 2, 2), (2, 1, 1)], [2.0, 0.5, 0.5], [4.0, 1.0, 1.0]),
+    ],
+)
+def test_v3_edit_physical_pixel_size_propagates(
+    tmp_path: pathlib.Path,
+    level_shapes: List[Tuple[int, ...]],
+    old_pps: List[float],
+    new_pps: List[float],
+) -> None:
+    store = str(tmp_path / "v3_pps.zarr")
+    data = np.zeros(level_shapes[0], dtype=np.uint8)
+
+    w = OMEZarrWriter(
+        store=store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=3,
+        axes_names=["t", "y", "x"],
+        axes_types=["time", "space", "space"],
+        physical_pixel_size=old_pps,
+        image_name="TEST",
+    )
+    w.write_full_volume(data)
+
+    # ACT
+    apply_writer_metadata_edits(store, physical_pixel_size=new_pps)
+
+    # ASSERT
+    root = zarr.open_group(store, mode="r")
+    ms0 = root.attrs.asdict()["ome"]["multiscales"][0]
+    ds = ms0["datasets"]
+
+    scale0 = ds[0]["coordinateTransformations"][0]["scale"]
+    scale1 = ds[1]["coordinateTransformations"][0]["scale"]
+    scale2 = ds[2]["coordinateTransformations"][0]["scale"]
+
+    assert scale0 == new_pps
+    assert scale1[0] == pytest.approx(new_pps[0])
+    assert scale1[1] == pytest.approx(new_pps[1] * 2.0)
+    assert scale1[2] == pytest.approx(new_pps[2] * 2.0)
+
+    assert scale2[0] == pytest.approx(new_pps[0])
+    assert scale2[1] == pytest.approx(new_pps[1] * 4.0)
+    assert scale2[2] == pytest.approx(new_pps[2] * 4.0)
+
+
+@pytest.mark.parametrize(
+    "creator_info",
+    [
+        {"name": "pytest", "version": "9.9.9"},
+        {"name": "scientist", "git_sha": "abc123"},
+    ],
+)
+def test_v3_edit_creator_info(
+    tmp_path: pathlib.Path,
+    creator_info: Dict[str, Any],
+) -> None:
+    store = str(tmp_path / "v3_creator.zarr")
+    level_shapes = [(2, 4, 4), (2, 2, 2)]
+    data = np.zeros(level_shapes[0], dtype=np.uint8)
+
+    w = OMEZarrWriter(
+        store=store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=3,
+        axes_names=["t", "y", "x"],
+        axes_types=["time", "space", "space"],
+        image_name="TEST",
+    )
+    w.write_full_volume(data)
+
+    # ACT
+    apply_writer_metadata_edits(store, creator_info=creator_info)
+
+    # ASSERT (raw metadata)
+    root = zarr.open_group(store, mode="r")
+    attrs = root.attrs.asdict()
+    assert attrs["ome"]["_creator"] == creator_info
