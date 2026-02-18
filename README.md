@@ -331,6 +331,113 @@ This produces a Zarr store with the original data and additional lower-resolutio
 
 The ML preset (`get_default_config_for_ml`) writes only the full-resolution data, chunked to optimize for patch-wise access often used in training pipelines.
 
+## Editing Zarrs
+
+`bioio-ome-zarr` provides a utility for editing metadata of an existing OME-Zarr store **in-place** without rewriting image data.
+
+The function:
+
+```python
+from bioio_ome_zarr.writer import edit_metadata
+```
+
+allows you to modify common metadata fields such as:
+
+* Image name
+* Channel metadata
+* Rendering definitions (rdefs)
+* Axis names, types, and units
+* Physical pixel size (with automatic pyramid propagation)
+* Root-level coordinate transforms
+* Creator / provenance information (NGFF v0.5)
+
+### Changing Axis Metadata (e.g. ZTX → TYX)
+
+Sometimes an image was written with incorrect or placeholder axis metadata. For example, you may have a dataset whose axes were labeled as:
+
+```
+Z, T, X
+```
+
+but the data actually represents:
+
+```
+T, Y, X
+```
+
+You can correct the axis metadata in-place:
+
+```python
+edit_metadata(
+    "my_image.ome.zarr",
+    axes_names=["t", "y", "x"],
+    axes_types=["time", "space", "space"],
+    axes_units=["second", "micrometer", "micrometer"],
+)
+```
+
+⚠️ **Important:** This operation updates metadata only.
+
+If the actual array order needs to change (for example, true ZTX data must become TYX data), you must rewrite the array data before updating metadata.
+
+
+### Updating Physical Pixel Size
+
+To change the physical pixel size of the base resolution:
+
+```python
+edit_metadata(
+    "my_image.ome.zarr",
+    physical_pixel_size=[1.0, 1.0, 0.5, 0.108, 0.108],
+)
+```
+
+This will:
+
+* Update the base resolution scale
+* Automatically propagate scale changes to all pyramid levels
+* Preserve relative downsampling ratios
+
+---
+
+### Updating Channel Metadata
+
+Channel metadata is written into the OMERO metadata block.
+
+```python
+from bioio_ome_zarr.metadata import Channel
+
+channels = [
+    Channel(label="DAPI", color="#0000FF"),
+    Channel(label="GFP", color="#00FF00"),
+]
+
+edit_metadata(
+    "my_image.ome.zarr",
+    channels=channels,
+)
+```
+
+### Setting Creator Metadata (NGFF v0.5)
+
+For NGFF v0.5 stores:
+
+```python
+edit_metadata(
+    "my_image.ome.zarr",
+    creator_info={
+        "name": "bioio-ome-zarr",
+        "version": "3.1.0",
+    },
+)
+```
+
+---
+
+## Notes
+* The Zarr store is modified **in-place**.
+* No image data is rewritten/rechunked.
+
 ---
 
 
@@ -341,4 +448,3 @@ The ML preset (`get_default_config_for_ml`) writes only the full-resolution data
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for information related to developing the code.
-

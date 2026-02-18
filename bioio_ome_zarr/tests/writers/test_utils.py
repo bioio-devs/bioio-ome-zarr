@@ -12,7 +12,7 @@ from bioio_ome_zarr.writers import (
     Channel,
     OMEZarrWriter,
     add_zarr_level,
-    apply_writer_metadata_edits,
+    edit_metadata,
     resize,
 )
 
@@ -110,7 +110,7 @@ def test_v2_edit_channel_label(
     w.write_full_volume(data)
 
     # ACT: edit channel
-    apply_writer_metadata_edits(
+    edit_metadata(
         store,
         channels=[Channel(label="NewLabel", color="00FF00")],
     )
@@ -154,7 +154,7 @@ def test_v2_edit_axes(
     w.write_full_volume(data)
 
     # ACT: change axes
-    apply_writer_metadata_edits(
+    edit_metadata(
         store,
         axes_names=new_axes_names,
         axes_types=new_axes_types,
@@ -199,7 +199,7 @@ def test_v2_edit_physical_pixel_size(
     w.write_full_volume(data)
 
     # ACTL: Update PPS
-    apply_writer_metadata_edits(store, physical_pixel_size=new_pps)
+    edit_metadata(store, physical_pixel_size=new_pps)
 
     # ASSERT
     root = zarr.open_group(store, mode="r")
@@ -256,7 +256,7 @@ def test_v3_edit_channel_label(
     w.write_full_volume(data)
 
     # ACT
-    apply_writer_metadata_edits(
+    edit_metadata(
         store,
         channels=[Channel(label="NewLabel", color="00FF00")],
     )
@@ -303,7 +303,7 @@ def test_v3_edit_axes_tyx_to_zyx(
     w.write_full_volume(data)
 
     # ACT
-    apply_writer_metadata_edits(
+    edit_metadata(
         store,
         axes_names=new_axes_names,
         axes_types=new_axes_types,
@@ -348,7 +348,7 @@ def test_v3_edit_physical_pixel_size_propagates(
     w.write_full_volume(data)
 
     # ACT
-    apply_writer_metadata_edits(store, physical_pixel_size=new_pps)
+    edit_metadata(store, physical_pixel_size=new_pps)
 
     # ASSERT
     root = zarr.open_group(store, mode="r")
@@ -396,7 +396,7 @@ def test_v3_edit_creator_info(
     w.write_full_volume(data)
 
     # ACT
-    apply_writer_metadata_edits(store, creator_info=creator_info)
+    edit_metadata(store, creator_info=creator_info)
 
     # ASSERT (raw metadata)
     root = zarr.open_group(store, mode="r")

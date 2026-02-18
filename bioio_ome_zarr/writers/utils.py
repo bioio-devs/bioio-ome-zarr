@@ -313,7 +313,7 @@ def _apply_axes_edits(
 # ----------------------------
 
 
-def _apply_writer_metadata_edits_v3(
+def _edit_metadata_v3(
     root: zarr.Group,
     *,
     image_name: Optional[str] = None,
@@ -379,7 +379,7 @@ def _apply_writer_metadata_edits_v3(
 # ----------------------------
 
 
-def _apply_writer_metadata_edits_v2(
+def _edit_metadata_v2(
     root: zarr.Group,
     *,
     image_name: Optional[str] = None,
@@ -439,7 +439,7 @@ def _apply_writer_metadata_edits_v2(
 # ----------------------------
 
 
-def apply_writer_metadata_edits(
+def edit_metadata(
     store: Union[str, Path, zarr.storage.StoreLike],
     *,
     image_name: Optional[str] = None,
@@ -498,7 +498,7 @@ def apply_writer_metadata_edits(
     root = zarr.open_group(store, mode="a")
 
     if isinstance(root.attrs.get("ome"), dict):
-        _apply_writer_metadata_edits_v3(
+        _edit_metadata_v3(
             root,
             image_name=image_name,
             channels=channels,
@@ -511,7 +511,7 @@ def apply_writer_metadata_edits(
             physical_pixel_size=physical_pixel_size,
         )
     else:
-        _apply_writer_metadata_edits_v2(
+        _edit_metadata_v2(
             root,
             image_name=image_name,
             channels=channels,
