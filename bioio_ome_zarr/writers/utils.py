@@ -1,7 +1,7 @@
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple, Union, cast
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import dask.array as da
 import numcodecs
@@ -15,9 +15,6 @@ from bioio_ome_zarr.reader import Reader
 
 DimSeq = Sequence[int]
 PerLevelDimSeq = Sequence[DimSeq]
-
-# LEGACY (Remove with V2 writer)
-DimTuple = Tuple[int, ...]
 
 
 @dataclass
@@ -58,130 +55,6 @@ def resize(
         resize_block, image_prepared, dtype=image.dtype, chunks=block_output_shape
     )[output_slices]
     return output.rechunk(image.chunksize).astype(image.dtype)
-
-
-# LEGACY (Remove with V2 writer)
-def get_scale_ratio(
-    level0: Tuple[int, ...], level1: Tuple[int, ...]
-) -> Tuple[float, ...]:
-    return tuple(level0[i] / level1[i] for i in range(len(level0)))
-
-
-# LEGACY (Remove with V2 writer)
-def compute_level_shapes(
-    lvl0shape: Tuple[int, ...],
-    scaling: Union[Tuple[float, ...], List[str]],
-    nlevels: Union[int, Tuple[int, ...]],
-    max_levels: Optional[int] = None,
-) -> List[Tuple[int, ...]]:
-    """
-    Compute multiscale pyramid level shapes.
-
-    Supports two signatures:
-      - Legacy: (lvl0shape, scaling: Tuple[float,...], nlevels: int)
-      - V3:     (base_shape, axis_names: List[str],
-                axis_factors: Tuple[int,...], max_levels: int)
-    """
-    # V3 mode: scaling is list of axis names, nlevels is tuple of int factors
-    if (
-        isinstance(scaling, list)
-        and all(isinstance(n, str) for n in scaling)
-        and isinstance(nlevels, tuple)
-    ):
-        axis_names = [n.lower() for n in scaling]
-        axis_factors = nlevels
-        shapes: List[Tuple[int, ...]] = [tuple(lvl0shape)]
-        lvl = 1
-        while max_levels is None or lvl < (max_levels or 0):
-            prev = shapes[-1]
-            nxt: List[int] = []
-            for i, size in enumerate(prev):
-                name = axis_names[i]
-                factor = axis_factors[i]
-                if name in ("x", "y") and factor > 1:
-                    nxt.append(max(1, size // factor))
-                else:
-                    nxt.append(size)
-            nxt_tuple = tuple(nxt)
-            if nxt_tuple == prev:
-                break
-            shapes.append(nxt_tuple)
-            lvl += 1
-        return shapes
-    # Legacy mode: scaling is tuple of floats, nlevels is int
-    scaling_factors = cast(Tuple[float, ...], scaling)
-    num_levels = cast(int, nlevels)
-    # Reuse the same variable 'shapes' without re-annotation
-    shapes = [tuple(lvl0shape)]
-    for _ in range(num_levels - 1):
-        prev = shapes[-1]
-        next_shape = tuple(
-            max(int(prev[i] / scaling_factors[i]), 1) for i in range(len(prev))
-        )
-        shapes.append(next_shape)
-    return shapes
-
-
-# LEGACY (Remove with V2 writer)
-def compute_level_chunk_sizes_zslice(
-    level_shapes: List[Tuple[int, ...]],
-) -> List[DimSeq]:
-    """
-    Compute Z-slice–based chunk sizes for a multiscale pyramid.
-    Parameters
-    ----------
-    level_shapes : List[Tuple[int, ...]]
-        Series of level shapes (potentially N-dimensional),
-        but expecting at least 5 dimensions for TCZYX indexing.
-    Returns
-    -------
-    List[DimSeq]
-        Chunk sizes as 5-tuples (T, C, Z, Y, X).
-    """
-
-    ndim = len(level_shapes[0])
-    result: List[DimSeq] = []
-
-    if ndim == 5:
-        # Legacy exact behavior
-        result = [(1, 1, 1, level_shapes[0][3], level_shapes[0][4])]
-        for i in range(1, len(level_shapes)):
-            prev_shape = level_shapes[i - 1]
-            curr_shape = level_shapes[i]
-            scale = tuple(prev_shape[j] / curr_shape[j] for j in range(5))
-            p = result[i - 1]
-            new_chunk: DimSeq = (
-                1,
-                1,
-                int(scale[4] * scale[3] * p[2]),
-                max(1, int(p[3] / max(1, scale[3]))),
-                max(1, int(p[4] / max(1, scale[4]))),
-            )
-            result.append(new_chunk)
-        return result
-
-    # Generic 2–4D path (assume last two dims are spatial Y, X)
-    y_idx = max(0, ndim - 2)
-    x_idx = max(0, ndim - 1)
-
-    first = [1] * ndim
-    first[y_idx] = level_shapes[0][y_idx]
-    first[x_idx] = level_shapes[0][x_idx]
-    result = [tuple(first)]
-
-    for i in range(1, len(level_shapes)):
-        prev_shape = level_shapes[i - 1]
-        curr_shape = level_shapes[i]
-        prev_chunk = list(result[-1])
-
-        y_scale = max(1, int(prev_shape[y_idx] / max(1, curr_shape[y_idx])))
-        x_scale = max(1, int(prev_shape[x_idx] / max(1, curr_shape[x_idx])))
-
-        prev_chunk[y_idx] = max(1, int(prev_chunk[y_idx] / y_scale))
-        prev_chunk[x_idx] = max(1, int(prev_chunk[x_idx] / x_scale))
-        result.append(tuple(prev_chunk))
-
-    return result
 
 
 # LEGACY (Remove with V3 writer)

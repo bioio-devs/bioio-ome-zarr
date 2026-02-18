@@ -331,14 +331,6 @@ This produces a Zarr store with the original data and additional lower-resolutio
 
 The ML preset (`get_default_config_for_ml`) writes only the full-resolution data, chunked to optimize for patch-wise access often used in training pipelines.
 
-
-## 🚨 Deprecation Notice
-
-The legacy **OmeZarrWriterV2** class (referred to here as “V2 Writer”) and **OmeZarrWriterV3** class (referred to here as “V3 Writer”) are **deprecated** and will be removed in a future release.
-They has been replaced by the new **OMEZarrWriter**, which supports writing to **both Zarr v2 (NGFF 0.4)** and **Zarr v3 (NGFF 0.5)** formats.
-
-For new code, please **use OMEZarrWriter**.
-
 ---
 
 

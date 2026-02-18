@@ -1,5 +1,5 @@
 import pathlib
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import pytest
@@ -7,11 +7,10 @@ from dask import array as da
 
 from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import (
-    OmeZarrWriterV2,
+    Channel,
+    OMEZarrWriter,
     add_zarr_level,
     chunk_size_from_memory_target,
-    compute_level_chunk_sizes_zslice,
-    get_scale_ratio,
     resize,
 )
 
@@ -71,70 +70,29 @@ def test_resize_simple() -> None:
     assert out.dtype == d.dtype
 
 
-@pytest.mark.parametrize(
-    "in_shapes, expected",
-    [
-        (
-            [
-                (512, 4, 100, 1000, 1000),
-                (512, 4, 100, 500, 500),
-                (512, 4, 100, 250, 250),
-            ],
-            [(1, 1, 1, 1000, 1000), (1, 1, 4, 500, 500), (1, 1, 16, 250, 250)],
-        ),
-    ],
-)
-def test_compute_level_chunk_sizes_zslice(
-    in_shapes: List[Tuple[int, ...]],
-    expected: List[Tuple[int, ...]],
-) -> None:
-    """
-    Test compute_level_chunk_sizes_zslice utility.
-    """
-    out = compute_level_chunk_sizes_zslice(in_shapes)
-    assert out == expected
-
-
-def test_get_scale_ratio() -> None:
-    """
-    Test get_scale_ratio utility.
-    """
-    lvl0: Tuple[int, ...] = (4, 8, 16)
-    lvl1: Tuple[int, ...] = (2, 4, 8)
-    assert get_scale_ratio(lvl0, lvl1) == (2.0, 2.0, 2.0)
-
-
 def test_add_zarr_level_using_reader(tmp_path: pathlib.Path) -> None:
-    # ARRANGE: Set up initial state
+    # ARRANGE:
     store_path = tmp_path / "test.zarr"
-    writer = OmeZarrWriterV2()
 
     data = np.arange(16, dtype="uint8").reshape((1, 1, 1, 4, 4))
     da_data = da.from_array(data, chunks=data.shape)
 
     # Initialize OME‑Zarr with a single resolution level
-    writer.init_store(
-        output_path=str(store_path),
-        shapes=[data.shape],
-        chunk_sizes=[data.shape],
+    writer = OMEZarrWriter(
+        store=str(store_path),
+        level_shapes=data.shape,
         dtype=data.dtype,
+        zarr_format=2,
         compressor=None,
-    )
-    writer.write_t_batches_array(da_data)
-    metadata = writer.generate_metadata(
         image_name="test",
-        channel_names=["A"],
-        physical_dims={"t": 1, "c": 1, "z": 1, "y": 1.0, "x": 1.0},
-        physical_units={
-            "t": "unit",
-            "c": "unit",
-            "z": "unit",
-            "y": "unit",
-            "x": "unit",
-        },
-        channel_colors=[0xFFFFFF],
+        channels=[Channel(label="A", color="#FFFFFF")],
+        axes_names=["t", "c", "z", "y", "x"],
+        axes_types=["time", "channel", "space", "space", "space"],
+        axes_units=["unit", "unit", "unit", "unit", "unit"],
+        physical_pixel_size=[1.0, 1.0, 1.0, 1.0, 1.0],
     )
-    writer.write_metadata(metadata)
+
+    writer.write_full_volume(da_data)
 
     # ACT
     add_zarr_level(str(store_path), (1, 1, 1, 0.5, 0.5), compressor=None)
@@ -155,4 +113,5 @@ def test_add_zarr_level_using_reader(tmp_path: pathlib.Path) -> None:
     data0 = rdr.get_image_dask_data("TCZYX", resolution_level=0).compute()
     data1 = rdr.get_image_dask_data("TCZYX", resolution_level=1).compute()
     expected = resize(da.from_array(data0), data1.shape, order=0).compute()
+
     assert np.array_equal(data1, expected), "Data mismatch after downsampling"
