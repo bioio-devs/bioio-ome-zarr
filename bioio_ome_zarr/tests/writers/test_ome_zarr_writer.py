@@ -11,7 +11,6 @@ from ngff_zarr.validate import validate as ngff_validate
 
 from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import Channel, OMEZarrWriter
-from bioio_ome_zarr.writers.utils import DimTuple
 
 from ..conftest import LOCAL_RESOURCES_DIR
 
@@ -160,7 +159,7 @@ def assert_valid_ome_zarr(
 def test_write_pyramid(
     tmp_path: pathlib.Path,
     zarr_format: int,
-    level_shapes: List[DimTuple],
+    level_shapes: List[Tuple[int, ...]],
     axes_names: Optional[List[str]],
     literal_level1: Optional[np.ndarray],
 ) -> None:

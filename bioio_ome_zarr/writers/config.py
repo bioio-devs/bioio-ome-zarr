@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Tuple, Union
 import dask.array as da
 import numpy as np
 
-from .utils import chunk_size_from_memory_target
+from .utils import multiscale_chunk_size_from_memory_target
 
 
 def _xy_pyramid_level_shapes(level0_shape: Tuple[int, ...]) -> List[Tuple[int, ...]]:
@@ -48,7 +48,10 @@ def get_default_config_for_viz(
 
     # One chunk shape applied to all levels (writer will replicate it)
     chunk_shape = tuple(
-        int(x) for x in chunk_size_from_memory_target(level0_shape, dtype, 16 << 20)
+        int(x)
+        for x in multiscale_chunk_size_from_memory_target(
+            [level0_shape], dtype, 16 << 20
+        )[0]
     )
 
     return {
@@ -71,7 +74,10 @@ def get_default_config_for_ml(
     dtype = np.dtype(getattr(data, "dtype", np.uint16))
 
     base_chunk = tuple(
-        int(x) for x in chunk_size_from_memory_target(level0_shape, dtype, 16 << 20)
+        int(x)
+        for x in multiscale_chunk_size_from_memory_target(
+            [level0_shape], dtype, 16 << 20
+        )[0]
     )
 
     # If we have at least (… Z Y X), set Z chunk to 1
