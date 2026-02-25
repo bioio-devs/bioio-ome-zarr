@@ -200,9 +200,7 @@ def _get_ds_scale(ds: Dict[str, Any]) -> Optional[List[float]]:
 
 def _set_ds_scale(ds: Dict[str, Any], scale: List[float]) -> None:
     cts = ds.get("coordinateTransformations") or [{}]
-    if not cts:
-        cts = [{}]
-    cts[0]["type"] = cts[0].get("type", "scale")
+    cts[0].setdefault("type", "scale")
     cts[0]["scale"] = list(scale)
     ds["coordinateTransformations"] = cts
 
