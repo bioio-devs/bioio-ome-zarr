@@ -1,6 +1,5 @@
 import pathlib
-
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pytest
@@ -12,9 +11,9 @@ from bioio_ome_zarr.writers import (
     Channel,
     OMEZarrWriter,
     add_zarr_level,
-    edit_metadata,
     resize,
 )
+from bioio_ome_zarr.writers.utils import edit_metadata
 
 
 def test_resize_simple() -> None:

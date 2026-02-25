@@ -6,6 +6,7 @@ from .metadata import Axes, Channel, MetadataParams, build_ngff_metadata
 from .ome_zarr_writer import OMEZarrWriter
 from .utils import (
     add_zarr_level,
+    edit_metadata,
     multiscale_chunk_size_from_memory_target,
     resize,
 )
