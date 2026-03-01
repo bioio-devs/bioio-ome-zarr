@@ -36,7 +36,7 @@ jobs:
     - name: Run Performance Benchmark
       run: just benchmark
     - name: Upload Performance Results
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: performance-results-${{ matrix.os }}
         path: "output.csv"
