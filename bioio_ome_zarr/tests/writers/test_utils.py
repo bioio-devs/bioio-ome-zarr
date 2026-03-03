@@ -320,23 +320,22 @@ def test_v3_edit_axes_tyx_to_zyx(
 
 
 @pytest.mark.parametrize(
-    "level_shapes, old_pps, new_pps",
+    "old_pps, new_pps",
     [
-        ([(2, 4, 4), (2, 2, 2), (2, 1, 1)], [2.0, 0.5, 0.5], [4.0, 1.0, 1.0]),
+        ([2.0, 0.5, 0.5], [4.0, 1.0, 1.0]),
     ],
 )
 def test_v3_edit_physical_pixel_size_propagates(
     tmp_path: pathlib.Path,
-    level_shapes: List[Tuple[int, ...]],
     old_pps: List[float],
     new_pps: List[float],
 ) -> None:
     store = str(tmp_path / "v3_pps.zarr")
-    data = np.zeros(level_shapes[0], dtype=np.uint8)
+    data = np.zeros((2, 4, 4), dtype=np.uint8)
 
     w = OMEZarrWriter(
         store=store,
-        level_shapes=level_shapes,
+        level_shapes=[(2, 4, 4), (2, 2, 2), (2, 1, 1)],
         dtype=data.dtype,
         zarr_format=3,
         axes_names=["t", "y", "x"],
