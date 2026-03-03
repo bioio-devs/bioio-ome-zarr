@@ -6,6 +6,44 @@ OME_NGFF_VERSION_V04 = "0.4"
 OME_NGFF_VERSION_V05 = "0.5"
 
 
+@dataclass(frozen=True)
+class FormatSpec:
+    """
+    Tiny spec descriptor for where metadata lives.
+    Paths are sequences of dict keys / list indexes to reach common blocks.
+    """
+
+    zarr_format: int
+    ngff_version: str
+
+    # Path to multiscales[0] (ms0)
+    ms0_path: Tuple[Any, ...]
+
+    # Path to the OMERO block (where channels/rdefs live)
+    omero_path: Tuple[Any, ...]
+
+
+# ----------------------------
+# Format spec constants
+# ----------------------------
+
+# NGFF 0.4 (Zarr v2)
+NGFF_V04 = FormatSpec(
+    zarr_format=2,
+    ngff_version=OME_NGFF_VERSION_V04,
+    ms0_path=("multiscales", 0),
+    omero_path=("omero",),
+)
+
+# NGFF 0.5 (Zarr v3)
+NGFF_V05 = FormatSpec(
+    zarr_format=3,
+    ngff_version=OME_NGFF_VERSION_V05,
+    ms0_path=("ome", "multiscales", 0),
+    omero_path=("ome", "omero"),
+)
+
+
 class Axes:
     """
     Holds axis metadata for an N-D image, aligned with NGFF 0.5 axes, and
