@@ -43,7 +43,6 @@ jobs:
       contents: read    # This is required for actions/checkout
     uses: bioio-devs/bioio-base/.github/workflows/shared_test.yml@main
     with:
-      test_checkout_lfs: true
       test_python_versions: '["3.11", "3.12", "3.13"]'
 
   # Check package performance
