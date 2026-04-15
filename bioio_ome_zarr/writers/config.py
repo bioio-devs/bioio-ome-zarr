@@ -5,52 +5,57 @@ import numpy as np
 
 from .utils import multiscale_chunk_size_from_memory_target
 
+_CHUNK_TARGET_BYTES = 16 << 20  # 16 MiB
 
-def _xy_pyramid_level_shapes(level0_shape: Tuple[int, ...]) -> List[Tuple[int, ...]]:
+
+def _pyramid_level_shapes(
+    level0_shape: Tuple[int, ...], n_spatial: int
+) -> List[Tuple[int, ...]]:
     """
-    Build a 3-level XY pyramid from level-0: halve Y/X at levels 1 and 2.
+    Build a 3-level pyramid from level-0, halving the last n_spatial axes at each level.
     Non-spatial axes are unchanged. Shapes are floored with a minimum of 1.
+    If ndim < n_spatial, all axes are treated as spatial.
     """
     ndim = len(level0_shape)
-    if ndim < 2:
-        return [tuple(int(x) for x in level0_shape)]
-
-    y_idx = ndim - 2
-    x_idx = ndim - 1
+    spatial_indices = list(range(ndim - min(n_spatial, ndim), ndim))
 
     def downsample(power_of_two: int) -> Tuple[int, ...]:
         factor = 2**power_of_two
         mutable = list(level0_shape)
-        mutable[y_idx] = max(1, int(level0_shape[y_idx]) // factor)
-        mutable[x_idx] = max(1, int(level0_shape[x_idx]) // factor)
+        for i in spatial_indices:
+            mutable[i] = max(1, int(level0_shape[i]) // factor)
         return tuple(int(x) for x in mutable)
 
     return [
         tuple(int(x) for x in level0_shape),  # level 0
-        downsample(1),  # level 1 (÷2 on Y/X)
-        downsample(2),  # level 2 (÷4 on Y/X)
+        downsample(1),  # level 1 (÷2)
+        downsample(2),  # level 2 (÷4)
     ]
 
 
 def get_default_config_for_viz(
     data: Union[np.ndarray, da.Array],
+    downsample_z: bool = False,
 ) -> Dict[str, Any]:
     """
     Visualization preset:
-      - 3-level XY pyramid (levels 0/1/2 with Y/X ÷1, ÷2, ÷4)
+      - 3-level pyramid (levels 0/1/2 with spatial axes ÷1, ÷2, ÷4)
+      - downsample_z=False (default): halve Y/X only (2D viewers, e.g. napari)
+      - downsample_z=True: halve Z/Y/X equally (3D viewers, e.g. Neuroglancer)
       - ~16 MiB chunking suggested from level-0, reused for all levels
       - Writer infers axes, zarr_format, image_name, etc.
     """
     level0_shape: Tuple[int, ...] = tuple(int(x) for x in data.shape)
     dtype = np.dtype(getattr(data, "dtype", np.uint16))
 
-    level_shapes = _xy_pyramid_level_shapes(level0_shape)
+    n_spatial = 3 if downsample_z else 2
+    level_shapes = _pyramid_level_shapes(level0_shape, n_spatial)
 
     # One chunk shape applied to all levels (writer will replicate it)
     chunk_shape = tuple(
         int(x)
         for x in multiscale_chunk_size_from_memory_target(
-            [level0_shape], dtype, 16 << 20
+            [level0_shape], dtype, _CHUNK_TARGET_BYTES
         )[0]
     )
 
@@ -76,7 +81,7 @@ def get_default_config_for_ml(
     base_chunk = tuple(
         int(x)
         for x in multiscale_chunk_size_from_memory_target(
-            [level0_shape], dtype, 16 << 20
+            [level0_shape], dtype, _CHUNK_TARGET_BYTES
         )[0]
     )
 
