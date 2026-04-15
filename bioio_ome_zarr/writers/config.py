@@ -40,8 +40,8 @@ def get_default_config_for_viz(
     """
     Visualization preset:
       - 3-level pyramid (levels 0/1/2 with spatial axes ÷1, ÷2, ÷4)
-      - downsample_z=False (default): halve Y/X only (2D viewers, e.g. napari)
-      - downsample_z=True: halve Z/Y/X equally (3D viewers, e.g. Neuroglancer)
+      - downsample_z=False (default): halve Y/X only (2D viewers)
+      - downsample_z=True: halve Z/Y/X equally (3D viewers)
       - ~16 MiB chunking suggested from level-0, reused for all levels
       - Writer infers axes, zarr_format, image_name, etc.
     """
