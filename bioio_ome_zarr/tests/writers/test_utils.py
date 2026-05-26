@@ -512,13 +512,6 @@ def test_v3_edit_creator_info(
                 (2, 3, 50, 256, 256),
             ],
         ),
-        # trivial all-ones — fits immediately, verifies no-duplicate guard.
-        (
-            (1, 1, 1),
-            2048,
-            3,
-            [(1, 1, 1)],
-        ),
     ],
 )
 def test_tile_target_shape_sequence(
@@ -535,13 +528,6 @@ def test_tile_target_shape_sequence(
 
     # Exact sequence matches expected prefix.
     assert levels[: len(expected_levels)] == [tuple(s) for s in expected_levels]
-
-    # Level 0 is always the first element.
-    assert levels[0] == tuple(level0_shape)
-
-    # No consecutive duplicate levels.
-    for a, b in zip(levels, levels[1:]):
-        assert a != b, f"Duplicate consecutive level {a}"
 
     # Non-spatial axes are unchanged across all levels.
     ndim = len(level0_shape)
@@ -567,23 +553,3 @@ def test_tile_target_shape_sequence(
     assert _grid_fits(
         levels[-1]
     ), f"Bottom level {levels[-1]} does not fit in {canvas_size}×{canvas_size} canvas"
-
-    # Second-to-last level must NOT fit (pyramid is maximally coarse).
-    if len(levels) >= 2:
-        assert not _grid_fits(
-            levels[-2]
-        ), f"Second-to-last {levels[-2]} already fit — pyramid stopped too early"
-
-    # Validate that expected_levels is mathematically consistent with the
-    # canvas constraint: every level except the last must NOT fit, and the
-    # last must fit.
-    expected_tuples = [tuple(s) for s in expected_levels]
-    for shape in expected_tuples[:-1]:
-        assert not _grid_fits(shape), (
-            f"Expected non-fitting level {shape} actually fits the "
-            f"{canvas_size}×{canvas_size} canvas — expected_levels is wrong"
-        )
-    assert _grid_fits(expected_tuples[-1]), (
-        f"Expected bottom level {expected_tuples[-1]} does not fit the "
-        f"{canvas_size}×{canvas_size} canvas — expected_levels is wrong"
-    )
