@@ -11,6 +11,7 @@ from bioio_ome_zarr.writers import (
     Channel,
     OMEZarrWriter,
     add_zarr_level,
+    pyramid_levels_to_tile_target,
     resize,
 )
 from bioio_ome_zarr.writers.utils import edit_metadata
@@ -400,3 +401,189 @@ def test_v3_edit_creator_info(
     root = zarr.open_group(store, mode="r")
     attrs = root.attrs.asdict()
     assert attrs["ome"]["_creator"] == creator_info
+
+
+# ---------------------------------------------------------------------------
+# pyramid_levels_to_tile_target
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "level0_shape, canvas_size, n_spatial, expected_levels",
+    [
+        # Z=1 — single tile (1×1 grid), same as a plain Y/X bound.
+        (
+            (1, 4096, 4096),
+            2048,
+            3,
+            [(1, 4096, 4096), (1, 2048, 2048)],
+        ),
+        # Z=4 — 2×2 grid; each tile must fit in canvas/2 = 1024.
+        (
+            (4, 2048, 2048),
+            2048,
+            3,
+            [(4, 2048, 2048), (4, 1024, 1024)],
+        ),
+        # Z=9 — 3×3 grid; tiles need two halvings to fit in canvas/3 ≈ 682.
+        (
+            (9, 2048, 2048),
+            2048,
+            3,
+            [(9, 2048, 2048), (9, 1024, 1024), (9, 512, 512)],
+        ),
+        # Z=50 — 8×7 grid; requires many halvings to fit (each tile ~256).
+        (
+            (50, 8192, 8192),
+            2048,
+            3,
+            [
+                (50, 8192, 8192),
+                (50, 4096, 4096),
+                (50, 2048, 2048),
+                (50, 1024, 1024),
+                (50, 512, 512),
+                (50, 256, 256),
+            ],
+        ),
+        # n_spatial=2 — no Z axis; grid is always 1×1 (plain Y/X bound).
+        (
+            (50, 4096, 4096),
+            2048,
+            2,
+            [(50, 4096, 4096), (50, 2048, 2048)],
+        ),
+        # 5D TCZYX — non-spatial T and C must never change.
+        (
+            (2, 3, 9, 2048, 2048),
+            2048,
+            3,
+            [(2, 3, 9, 2048, 2048), (2, 3, 9, 1024, 1024), (2, 3, 9, 512, 512)],
+        ),
+        # Z=2048 — symmetric ZYX cube; Z co-halves every step (always == Y/X),
+        # producing 5 levels down to (128, 128, 128) where an 11×12 grid fits.
+        (
+            (2048, 2048, 2048),
+            2048,
+            3,
+            [
+                (2048, 2048, 2048),
+                (1024, 1024, 1024),
+                (512, 512, 512),
+                (256, 256, 256),
+                (128, 128, 128),
+            ],
+        ),
+        # Z=200 — Z stays fixed while Y/X halve (200 < Y at each step), then
+        # at the Y=256→128 transition next_min_inner=128 < Z=200, so Z
+        # co-halves from 200→100 in the same step as Y/X.
+        (
+            (200, 4096, 4096),
+            2048,
+            3,
+            [
+                (200, 4096, 4096),
+                (200, 2048, 2048),
+                (200, 1024, 1024),
+                (200, 512, 512),
+                (200, 256, 256),
+                (100, 128, 128),
+            ],
+        ),
+        # level0 already fits — single-element list returned immediately.
+        (
+            (1, 512, 512),
+            2048,
+            3,
+            [(1, 512, 512)],
+        ),
+        # 5D with large Z — exercises non-spatial axis invariance across many levels.
+        (
+            (2, 3, 50, 16384, 16384),
+            2048,
+            3,
+            [
+                (2, 3, 50, 16384, 16384),
+                (2, 3, 50, 8192, 8192),
+                (2, 3, 50, 4096, 4096),
+                (2, 3, 50, 2048, 2048),
+                (2, 3, 50, 1024, 1024),
+                (2, 3, 50, 512, 512),
+                (2, 3, 50, 256, 256),
+            ],
+        ),
+        # trivial all-ones — fits immediately, verifies no-duplicate guard.
+        (
+            (1, 1, 1),
+            2048,
+            3,
+            [(1, 1, 1)],
+        ),
+    ],
+)
+def test_tile_target_shape_sequence(
+    level0_shape: Tuple[int, ...],
+    canvas_size: int,
+    n_spatial: int,
+    expected_levels: List[Tuple[int, ...]],
+) -> None:
+    import math as _math
+
+    levels = pyramid_levels_to_tile_target(
+        level0_shape, canvas_size=canvas_size, n_spatial=n_spatial
+    )
+
+    # Exact sequence matches expected prefix.
+    assert levels[: len(expected_levels)] == [tuple(s) for s in expected_levels]
+
+    # Level 0 is always the first element.
+    assert levels[0] == tuple(level0_shape)
+
+    # No consecutive duplicate levels.
+    for a, b in zip(levels, levels[1:]):
+        assert a != b, f"Duplicate consecutive level {a}"
+
+    # Non-spatial axes are unchanged across all levels.
+    ndim = len(level0_shape)
+    n_sp = min(n_spatial, ndim)
+    non_spatial_end = ndim - n_sp
+    for lvl in levels:
+        assert lvl[:non_spatial_end] == tuple(
+            level0_shape[:non_spatial_end]
+        ), f"Non-spatial axes changed: {lvl}"
+
+    # Helper: check whether a shape's Z-plane grid fits within canvas_size.
+    def _grid_fits(shape: Tuple[int, ...]) -> bool:
+        if n_sp >= 3:
+            z = _math.prod(shape[ndim - n_sp : ndim - 2])
+            cols = _math.ceil(_math.sqrt(z)) if z > 0 else 1
+            rows = _math.ceil(z / cols) if cols > 0 else 1
+        else:
+            rows, cols = 1, 1
+        y, x = shape[-2], shape[-1]
+        return rows * y <= canvas_size and cols * x <= canvas_size
+
+    # Bottom level must fit.
+    assert _grid_fits(
+        levels[-1]
+    ), f"Bottom level {levels[-1]} does not fit in {canvas_size}×{canvas_size} canvas"
+
+    # Second-to-last level must NOT fit (pyramid is maximally coarse).
+    if len(levels) >= 2:
+        assert not _grid_fits(
+            levels[-2]
+        ), f"Second-to-last {levels[-2]} already fit — pyramid stopped too early"
+
+    # Validate that expected_levels is mathematically consistent with the
+    # canvas constraint: every level except the last must NOT fit, and the
+    # last must fit.
+    expected_tuples = [tuple(s) for s in expected_levels]
+    for shape in expected_tuples[:-1]:
+        assert not _grid_fits(shape), (
+            f"Expected non-fitting level {shape} actually fits the "
+            f"{canvas_size}×{canvas_size} canvas — expected_levels is wrong"
+        )
+    assert _grid_fits(expected_tuples[-1]), (
+        f"Expected bottom level {expected_tuples[-1]} does not fit the "
+        f"{canvas_size}×{canvas_size} canvas — expected_levels is wrong"
+    )

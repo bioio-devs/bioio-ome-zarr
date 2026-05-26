@@ -8,6 +8,7 @@ from .utils import (
     add_zarr_level,
     edit_metadata,
     multiscale_chunk_size_from_memory_target,
+    pyramid_levels_to_tile_target,
     resize,
 )
 
@@ -23,4 +24,5 @@ __all__ = [
     "resize",
     "get_default_config_for_ml",
     "get_default_config_for_viz",
+    "pyramid_levels_to_tile_target",
 ]

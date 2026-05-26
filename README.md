@@ -287,6 +287,39 @@ chunks = [
  ]
 ```
 
+**`pyramid_levels_to_tile_target(level0_shape, canvas_size=2048, n_spatial=2) -> list[tuple[int, ...]]`**  
+Builds a pyramid from `level0_shape` downward, halving until all Z planes arranged in a square grid fit within a `canvas_size × canvas_size` canvas.
+
+Each Z plane is one tile of size Y × X. The tiles are arranged in a roughly square grid (`cols = ceil(sqrt(Z))`, `rows = ceil(Z / cols)`), and the function returns every level from level 0 down to the first (largest) level where `rows * Y <= canvas_size` and `cols * X <= canvas_size`. Level 0 is always included verbatim.
+
+Y and X are halved at every step. Z is also halved whenever it would otherwise exceed the current Y or X size. With `n_spatial=2` (the default) there is no Z axis, the grid is always 1×1, and the constraint reduces to `Y <= canvas_size` and `X <= canvas_size`.
+
+The returned list is passed directly to `OMEZarrWriter` as `level_shapes`.
+
+```python
+from bioio_ome_zarr.writers import OMEZarrWriter, pyramid_levels_to_tile_target
+import numpy as np
+
+data = np.zeros((50, 8192, 8192), dtype="uint16")
+
+# Z=50 → 8×7 grid, halve until each tile fits in a 2048×2048 canvas
+level_shapes = pyramid_levels_to_tile_target(
+    data.shape,
+    canvas_size=2048,
+    n_spatial=3,   # treat Z, Y, X as spatial
+)
+# level_shapes:
+# [(50, 8192, 8192), (50, 4096, 4096), (50, 2048, 2048),
+#  (50, 1024, 1024), (50, 512, 512),   (50, 256, 256)]
+
+writer = OMEZarrWriter(
+    store="output.zarr",
+    level_shapes=level_shapes,
+    dtype=data.dtype,
+)
+writer.write_full_volume(data)
+```
+
 **`add_zarr_level(existing_zarr, scale_factors, compressor=None, t_batch=4) -> None`**
 Appends a new resolution level to an existing **v2 OME-Zarr** store, writing in time (`T`) batches.
 

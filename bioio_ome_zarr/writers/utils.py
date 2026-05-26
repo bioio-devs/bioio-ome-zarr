@@ -136,6 +136,108 @@ def add_zarr_level(
     )
 
 
+def pyramid_levels_to_tile_target(
+    level0_shape: Tuple[int, ...],
+    canvas_size: int = 2048,
+    n_spatial: int = 2,
+) -> List[Tuple[int, ...]]:
+    """
+    Build pyramid level shapes by halving until all Z planes, arranged in a
+    square grid, fit within a ``canvas_size × canvas_size`` pixel canvas.
+
+    Each Z plane is one tile of size Y × X. The tiles are arranged in a
+    roughly square grid (``cols = ceil(sqrt(Z))``, ``rows = ceil(Z / cols)``),
+    and the bottom level is the largest (least-downsampled) level where the
+    full grid fits: ``rows * Y <= canvas_size`` and ``cols * X <= canvas_size``.
+
+    Dtype is not considered — this is a pixel-dimension constraint only.
+    Level 0 is always included verbatim.
+
+    Y and X are halved at every step. Z is also halved whenever it would
+    otherwise exceed the current Y or X size.
+    With ``n_spatial=2`` there is no Z axis, the grid is always 1×1, and the
+    condition reduces to ``Y <= canvas_size`` and ``X <= canvas_size``.
+
+    Examples (n_spatial=3, canvas_size=2048)::
+
+        # Z=1 — 1×1 grid; constraint is simply Y <= 2048 and X <= 2048
+        (1, 4096, 4096) -> (1, 2048, 2048)
+
+        # Z=4 — 2×2 grid; constraint: rows*Y = 2*Y <= 2048, cols*X = 2*X <= 2048
+        (4, 2048, 2048) -> (4, 1024, 1024)
+
+        # Z=9 — 3×3 grid; constraint: 3*Y <= 2048 and 3*X <= 2048 (max ~682 per dim)
+        # halving stops at 512, the largest power-of-2 that satisfies the constraint
+        (9, 2048, 2048) -> (9, 1024, 1024) -> (9, 512, 512)
+
+        # Z=50 — 8×7 grid; constraint: 7*Y <= 2048 and 8*X <= 2048 (max Y≈292, X=256)
+        (50, 8192, 8192) -> (50, 4096, 4096) -> (50, 2048, 2048)
+                         -> (50, 1024, 1024) -> (50, 512, 512) -> (50, 256, 256)
+
+        # Level 0 already fits — returned as-is
+        (1, 512, 512) -> [(1, 512, 512)]
+
+    Parameters
+    ----------
+    level0_shape:
+        Shape of the top (full-resolution) level.
+    canvas_size:
+        Total pixel budget for the Z-plane grid in each spatial dimension.
+        Default 2048.
+    n_spatial:
+        Number of rightmost axes treated as spatial. Default 2 (Y/X only,
+        single-tile grid). Set to 3 for ZYX data to enable Z-grid tiling.
+
+    Returns
+    -------
+    List[Tuple[int, ...]]
+        Pyramid level shapes from level 0 down to the first level whose Z-plane
+        grid fits within ``canvas_size``. Returns a single-element list if
+        level 0 already fits.
+    """
+    ndim = len(level0_shape)
+    spatial_indices = list(range(ndim - min(n_spatial, ndim), ndim))
+    inner_indices = (
+        spatial_indices[-2:] if len(spatial_indices) > 2 else spatial_indices
+    )
+    outer_indices = spatial_indices[:-2] if len(spatial_indices) > 2 else []
+
+    def _next_shape(current: Tuple[int, ...]) -> Tuple[int, ...]:
+        shape = list(current)
+        min_inner = min(current[i] for i in inner_indices) if inner_indices else 1
+        min_outer = min(current[i] for i in outer_indices) if outer_indices else 0
+        next_min_inner = max(1, min_inner // 2)
+        for i in inner_indices:
+            shape[i] = max(1, shape[i] // 2)
+        if min_outer > next_min_inner:
+            for i in outer_indices:
+                shape[i] = max(1, shape[i] // 2)
+        return tuple(shape)
+
+    def _fits(shape: Tuple[int, ...]) -> bool:
+        z = math.prod(shape[i] for i in outer_indices) if outer_indices else 1
+        cols = math.ceil(math.sqrt(z)) if z > 0 else 1
+        rows = math.ceil(z / cols) if cols > 0 else 1
+        y = shape[inner_indices[0]] if len(inner_indices) >= 2 else 1
+        x = shape[inner_indices[-1]] if inner_indices else 1
+        return rows * y <= canvas_size and cols * x <= canvas_size
+
+    levels: List[Tuple[int, ...]] = [tuple(int(x) for x in level0_shape)]
+    if _fits(levels[0]):
+        return levels
+
+    while True:
+        prev = levels[-1]
+        next_shape = _next_shape(prev)
+        if next_shape == prev:
+            break
+        levels.append(next_shape)
+        if _fits(next_shape):
+            break
+
+    return levels
+
+
 def multiscale_chunk_size_from_memory_target(
     level_shapes: Sequence[Sequence[int]],
     dtype: Union[str, np.dtype],
