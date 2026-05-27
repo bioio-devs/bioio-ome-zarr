@@ -84,9 +84,6 @@ def main() -> None:
                 "chunks": str(data.chunksize),
             })
 
-    print(f"\nmedian {statistics.median(times):.3f}s  min {min(times):.3f}s  max {max(times):.3f}s")
-    print(f"results appended to: {args.output}")
-
 
 if __name__ == "__main__":
     main()
