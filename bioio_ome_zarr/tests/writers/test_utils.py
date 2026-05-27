@@ -411,57 +411,42 @@ def test_v3_edit_creator_info(
 @pytest.mark.parametrize(
     "level0_shape, canvas_size, n_spatial, expected_levels",
     [
-        # Z=1 — single tile (1×1 grid), same as a plain Y/X bound.
+        # Z=1 — single tile, basic Y/X-only halving.
         (
             (1, 4096, 4096),
             2048,
             3,
             [(1, 4096, 4096), (1, 2048, 2048)],
         ),
-        # Z=4 — 2×2 grid; each tile must fit in canvas/2 = 1024.
+        # Square tiles, one halving step.
         (
             (4, 2048, 2048),
             2048,
             3,
             [(4, 2048, 2048), (4, 1024, 1024)],
         ),
-        # Z=9 — 3×3 grid; tiles need two halvings to fit in canvas/3 ≈ 682.
+        # Square tiles, Z stays fixed across multiple halvings.
         (
             (9, 2048, 2048),
             2048,
             3,
             [(9, 2048, 2048), (9, 1024, 1024), (9, 512, 512)],
         ),
-        # Z=50 — 8×7 grid; requires many halvings to fit (each tile ~256).
-        (
-            (50, 8192, 8192),
-            2048,
-            3,
-            [
-                (50, 8192, 8192),
-                (50, 4096, 4096),
-                (50, 2048, 2048),
-                (50, 1024, 1024),
-                (50, 512, 512),
-                (50, 256, 256),
-            ],
-        ),
-        # n_spatial=2 — no Z axis; grid is always 1×1 (plain Y/X bound).
+        # n_spatial=2 — Z axis ignored entirely, always a 1×1 grid.
         (
             (50, 4096, 4096),
             2048,
             2,
             [(50, 4096, 4096), (50, 2048, 2048)],
         ),
-        # 5D TCZYX — non-spatial T and C must never change.
+        # 5D TCZYX — non-spatial T and C axes never change.
         (
             (2, 3, 9, 2048, 2048),
             2048,
             3,
             [(2, 3, 9, 2048, 2048), (2, 3, 9, 1024, 1024), (2, 3, 9, 512, 512)],
         ),
-        # Z=2048 — symmetric ZYX cube; Z co-halves every step (always == Y/X),
-        # producing 5 levels down to (128, 128, 128) where an 11×12 grid fits.
+        # Cube — Z exceeds max(Y//2, X//2) at every step so Z co-halves each time.
         (
             (2048, 2048, 2048),
             2048,
@@ -474,9 +459,8 @@ def test_v3_edit_creator_info(
                 (128, 128, 128),
             ],
         ),
-        # Z=200 — Z stays fixed while Y/X halve (200 < Y at each step), then
-        # at the Y=256→128 transition next_min_inner=128 < Z=200, so Z
-        # co-halves from 200→100 in the same step as Y/X.
+        # Z halves once at the final step — Z=200 stays fixed until Y reaches 256,
+        # then Z > max(128, 128) fires and Z halves to 100.
         (
             (200, 4096, 4096),
             2048,
@@ -490,27 +474,41 @@ def test_v3_edit_creator_info(
                 (100, 128, 128),
             ],
         ),
-        # level0 already fits — single-element list returned immediately.
+        # Level 0 already fits — single-element list returned immediately.
         (
             (1, 512, 512),
             2048,
             3,
             [(1, 512, 512)],
         ),
-        # 5D with large Z — exercises non-spatial axis invariance across many levels.
+        # Non-square, already fits — optimal arrangement (4 rows × 1 col) passes
+        # where a sqrt-based 2×2 grid (2*2048=4096 > canvas) would not.
         (
-            (2, 3, 50, 16384, 16384),
+            (4, 512, 2048),
+            2048,
+            3,
+            [(4, 512, 2048)],
+        ),
+        # Non-square, halving needed — stops at (50, 512, 64) where
+        # (2048//512)*(2048//64) = 4*32 = 128 >= 50; Z preserved throughout.
+        (
+            (50, 4096, 512),
             2048,
             3,
             [
-                (2, 3, 50, 16384, 16384),
-                (2, 3, 50, 8192, 8192),
-                (2, 3, 50, 4096, 4096),
-                (2, 3, 50, 2048, 2048),
-                (2, 3, 50, 1024, 1024),
-                (2, 3, 50, 512, 512),
-                (2, 3, 50, 256, 256),
+                (50, 4096, 512),
+                (50, 2048, 256),
+                (50, 1024, 128),
+                (50, 512, 64),
             ],
+        ),
+        # Extreme aspect ratio — X=8 is tiny but must not drive premature Z halving.
+        # (50, 2048, 4) fits: (2048//2048)*(2048//4) = 512 >= 50, so Z stays at 50.
+        (
+            (50, 4096, 8),
+            2048,
+            3,
+            [(50, 4096, 8), (50, 2048, 4)],
         ),
     ],
 )
@@ -539,15 +537,12 @@ def test_tile_target_shape_sequence(
         ), f"Non-spatial axes changed: {lvl}"
 
     # Helper: check whether a shape's Z-plane grid fits within canvas_size.
+    # Uses the same optimal-arrangement criterion as the implementation:
+    # (canvas_size // y) * (canvas_size // x) >= z.
     def _grid_fits(shape: Tuple[int, ...]) -> bool:
-        if n_sp >= 3:
-            z = _math.prod(shape[ndim - n_sp : ndim - 2])
-            cols = _math.ceil(_math.sqrt(z)) if z > 0 else 1
-            rows = _math.ceil(z / cols) if cols > 0 else 1
-        else:
-            rows, cols = 1, 1
+        z = _math.prod(shape[ndim - n_sp : ndim - 2]) if n_sp >= 3 else 1
         y, x = shape[-2], shape[-1]
-        return rows * y <= canvas_size and cols * x <= canvas_size
+        return (canvas_size // y) * (canvas_size // x) >= z
 
     # Bottom level must fit.
     assert _grid_fits(

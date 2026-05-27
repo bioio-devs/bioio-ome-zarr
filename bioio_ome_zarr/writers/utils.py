@@ -143,18 +143,21 @@ def pyramid_levels_to_tile_target(
 ) -> List[Tuple[int, ...]]:
     """
     Build pyramid level shapes by halving until all Z planes, arranged in a
-    square grid, fit within a ``canvas_size × canvas_size`` pixel canvas.
+    grid, fit within a ``canvas_size × canvas_size`` pixel canvas.
 
-    Each Z plane is one tile of size Y × X. The tiles are arranged in a
-    roughly square grid (``cols = ceil(sqrt(Z))``, ``rows = ceil(Z / cols)``),
-    and the bottom level is the largest (least-downsampled) level where the
-    full grid fits: ``rows * Y <= canvas_size`` and ``cols * X <= canvas_size``.
+    Each Z plane is one tile of size Y × X. Tiles need not be square. The
+    bottom level is the largest (least-downsampled) level where Z tiles can
+    be arranged in *some* rows × cols grid that satisfies
+    ``rows * Y <= canvas_size`` and ``cols * X <= canvas_size``. This is
+    equivalent to ``(canvas_size // Y) * (canvas_size // X) >= Z``.
 
     Dtype is not considered — this is a pixel-dimension constraint only.
     Level 0 is always included verbatim.
 
-    Y and X are halved at every step. Z is also halved whenever it would
-    otherwise exceed the current Y or X size.
+    Y and X are halved at every step. Z is also halved whenever it exceeds
+    the *largest* of the new Y and X (i.e. ``Z > max(Y//2, X//2)``), which
+    prevents the small dimension of non-square tiles from triggering premature
+    Z halving.
     With ``n_spatial=2`` there is no Z axis, the grid is always 1×1, and the
     condition reduces to ``Y <= canvas_size`` and ``X <= canvas_size``.
 
@@ -163,16 +166,21 @@ def pyramid_levels_to_tile_target(
         # Z=1 — 1×1 grid; constraint is simply Y <= 2048 and X <= 2048
         (1, 4096, 4096) -> (1, 2048, 2048)
 
-        # Z=4 — 2×2 grid; constraint: rows*Y = 2*Y <= 2048, cols*X = 2*X <= 2048
+        # Z=4 — square tiles, 2×2 grid fits at 1024
         (4, 2048, 2048) -> (4, 1024, 1024)
 
-        # Z=9 — 3×3 grid; constraint: 3*Y <= 2048 and 3*X <= 2048 (max ~682 per dim)
-        # halving stops at 512, the largest power-of-2 that satisfies the constraint
+        # Z=9 — constraint: (2048//Y)*(2048//X) >= 9; halving stops at 512
         (9, 2048, 2048) -> (9, 1024, 1024) -> (9, 512, 512)
 
-        # Z=50 — 8×7 grid; constraint: 7*Y <= 2048 and 8*X <= 2048 (max Y≈292, X=256)
-        (50, 8192, 8192) -> (50, 4096, 4096) -> (50, 2048, 2048)
-                         -> (50, 1024, 1024) -> (50, 512, 512) -> (50, 256, 256)
+        # Z=50 — square tiles; stops at 256
+        (50, 8192, 8192) -> ... -> (50, 256, 256)
+
+        # Non-square: Z=4, wide tiles (Y=512, X=2048) — 4×1 layout fits at level 0
+        # (2048//512)*(2048//2048) = 4*1 = 4 >= 4  → already fits
+        (4, 512, 2048) -> [(4, 512, 2048)]
+
+        # Non-square: Z=50, tall tiles — optimal layout drives the stopping level
+        (50, 4096, 512) -> (50, 2048, 256) -> (50, 1024, 128) -> (50, 512, 64)
 
         # Level 0 already fits — returned as-is
         (1, 512, 512) -> [(1, 512, 512)]
@@ -204,23 +212,25 @@ def pyramid_levels_to_tile_target(
 
     def _next_shape(current: Tuple[int, ...]) -> Tuple[int, ...]:
         shape = list(current)
-        min_inner = min(current[i] for i in inner_indices) if inner_indices else 1
         min_outer = min(current[i] for i in outer_indices) if outer_indices else 0
-        next_min_inner = max(1, min_inner // 2)
         for i in inner_indices:
             shape[i] = max(1, shape[i] // 2)
-        if min_outer > next_min_inner:
+        # Halve Z only when it exceeds the largest remaining spatial dimension.
+        # Using max(Y, X) rather than min(Y, X) prevents extreme-aspect-ratio tiles
+        # from triggering premature Z halving via the small dimension.
+        next_max_inner = max((shape[i] for i in inner_indices), default=1)
+        if min_outer > next_max_inner:
             for i in outer_indices:
                 shape[i] = max(1, shape[i] // 2)
         return tuple(shape)
 
     def _fits(shape: Tuple[int, ...]) -> bool:
         z = math.prod(shape[i] for i in outer_indices) if outer_indices else 1
-        cols = math.ceil(math.sqrt(z)) if z > 0 else 1
-        rows = math.ceil(z / cols) if cols > 0 else 1
         y = shape[inner_indices[0]] if len(inner_indices) >= 2 else 1
         x = shape[inner_indices[-1]] if inner_indices else 1
-        return rows * y <= canvas_size and cols * x <= canvas_size
+        # Maximum rows and cols that fit one tile within the canvas; check that
+        # their product can accommodate all z planes in some arrangement.
+        return (canvas_size // y) * (canvas_size // x) >= z
 
     levels: List[Tuple[int, ...]] = [tuple(int(x) for x in level0_shape)]
     if _fits(levels[0]):

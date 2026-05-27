@@ -288,11 +288,11 @@ chunks = [
 ```
 
 **`pyramid_levels_to_tile_target(level0_shape, canvas_size=2048, n_spatial=2) -> list[tuple[int, ...]]`**  
-Builds a pyramid from `level0_shape` downward, halving until all Z planes arranged in a square grid fit within a `canvas_size × canvas_size` canvas.
+Builds a pyramid from `level0_shape` downward, halving until all Z planes fit within a `canvas_size × canvas_size` canvas.
 
-Each Z plane is one tile of size Y × X. The tiles are arranged in a roughly square grid (`cols = ceil(sqrt(Z))`, `rows = ceil(Z / cols)`), and the function returns every level from level 0 down to the first (largest) level where `rows * Y <= canvas_size` and `cols * X <= canvas_size`. Level 0 is always included verbatim.
+Each Z plane is one tile of size Y × X. Tiles do not need to be square. The function returns every level from level 0 down to the first (largest) level where Z tiles can be arranged in *some* rows × cols grid satisfying `rows * Y <= canvas_size` and `cols * X <= canvas_size`. This is equivalent to `(canvas_size // Y) * (canvas_size // X) >= Z`. Level 0 is always included verbatim.
 
-Y and X are halved at every step. Z is also halved whenever it would otherwise exceed the current Y or X size. With `n_spatial=2` (the default) there is no Z axis, the grid is always 1×1, and the constraint reduces to `Y <= canvas_size` and `X <= canvas_size`.
+Y and X are halved at every step. Z is also halved whenever it exceeds the largest of the new Y and X (i.e. `Z > max(Y//2, X//2)`). This prevents the small dimension of non-square tiles from triggering premature Z halving. With `n_spatial=2` (the default) there is no Z axis, the grid is always 1×1, and the constraint reduces to `Y <= canvas_size` and `X <= canvas_size`.
 
 The returned list is passed directly to `OMEZarrWriter` as `level_shapes`.
 
@@ -371,7 +371,7 @@ The ML preset (`get_default_config_for_ml`) writes only the full-resolution data
 The function:
 
 ```python
-from bioio_ome_zarr.writer import edit_metadata
+from bioio_ome_zarr.writers import edit_metadata
 ```
 
 allows you to modify common metadata fields such as:
