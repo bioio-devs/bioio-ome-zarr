@@ -1,7 +1,8 @@
 import math
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import dask.array as da
 import numcodecs
@@ -139,7 +140,7 @@ def add_zarr_level(
 def pyramid_levels_to_tile_target(
     level0_shape: Tuple[int, ...],
     canvas_size: int = 2048,
-    n_spatial: int = 2,
+    n_spatial: Literal[2, 3] = 2,
 ) -> List[Tuple[int, ...]]:
     """
     Build pyramid level shapes by halving until all Z planes, arranged in a
@@ -169,7 +170,7 @@ def pyramid_levels_to_tile_target(
         # Z=4 — square tiles, 2×2 grid fits at 1024
         (4, 2048, 2048) -> (4, 1024, 1024)
 
-        # Z=9 — constraint: (2048//Y)*(2048//X) >= 9; halving stops at 512
+        # Z=9 — 16 slots available at 512 (4×4 grid), 9 used, 7 blank
         (9, 2048, 2048) -> (9, 1024, 1024) -> (9, 512, 512)
 
         # Z=50 — square tiles; stops at 256
@@ -191,10 +192,11 @@ def pyramid_levels_to_tile_target(
         Shape of the top (full-resolution) level.
     canvas_size:
         Total pixel budget for the Z-plane grid in each spatial dimension.
-        Default 2048.
+        Default 2048 — A texture canvas size used by apps like VolE.
     n_spatial:
-        Number of rightmost axes treated as spatial. Default 2 (Y/X only,
-        single-tile grid). Set to 3 for ZYX data to enable Z-grid tiling.
+        Number of rightmost axes treated as spatial. Must be 2 or 3.
+        Use 2 (default) for YX-only data (single-tile grid, no Z tiling).
+        Use 3 for ZYX data to enable Z-grid tiling.
 
     Returns
     -------
@@ -203,8 +205,12 @@ def pyramid_levels_to_tile_target(
         grid fits within ``canvas_size``. Returns a single-element list if
         level 0 already fits.
     """
+    if n_spatial not in (2, 3):
+        raise ValueError(f"n_spatial must be 2 or 3, got {n_spatial}")
+
     ndim = len(level0_shape)
     spatial_indices = list(range(ndim - min(n_spatial, ndim), ndim))
+    # inner_indices = the two rightmost spatial axes (Y and X)
     inner_indices = (
         spatial_indices[-2:] if len(spatial_indices) > 2 else spatial_indices
     )
@@ -233,19 +239,23 @@ def pyramid_levels_to_tile_target(
         return (canvas_size // y) * (canvas_size // x) >= z
 
     levels: List[Tuple[int, ...]] = [tuple(int(x) for x in level0_shape)]
-    if _fits(levels[0]):
-        return levels
 
     while True:
         prev = levels[-1]
+        if _fits(prev):
+            return levels
         next_shape = _next_shape(prev)
         if next_shape == prev:
-            break
+            warnings.warn(
+                f"pyramid_levels_to_tile_target: could not find a level that fits "
+                f"within a {canvas_size}×{canvas_size} canvas — the shape converged "
+                f"at {prev} without satisfying the tile constraint. "
+                f"Consider increasing canvas_size.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return levels
         levels.append(next_shape)
-        if _fits(next_shape):
-            break
-
-    return levels
 
 
 def multiscale_chunk_size_from_memory_target(
