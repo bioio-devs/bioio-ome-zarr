@@ -1,3 +1,4 @@
+import warnings
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
@@ -531,9 +532,158 @@ class OMEZarrWriter:
         # compute and let dask optimize
         da.compute(*ops)
 
+    def write_region(
+        self,
+        data: Union[np.ndarray, da.Array],
+        region: Tuple[slice, ...],
+        *,
+        lock: bool = True,
+    ) -> None:
+        """
+        Write data into an arbitrary sub-region across all pyramid levels.
+
+        Parameters
+        ----------
+        data : Union[np.ndarray, dask.array.Array]
+            Array whose shape matches the extents of ``region`` at level 0.
+        region : Tuple[slice, ...]
+            One ``slice`` per axis in level-0 coordinate space.
+            ``slice(None)`` covers the full axis extent.
+        lock : bool
+            Whether to acquire a threading lock on each chunk write (v3 only).
+            Set ``False`` when the region is shard-aligned and callers guarantee
+            no two concurrent writes touch the same shard.
+        """
+        if not self._initialized:
+            self._initialize()
+
+        if (
+            not lock
+            and self.zarr_format == 3
+            and self.shards_per_level is not None
+            and self.num_levels > 1
+        ):
+            misaligned: List[str] = []
+            for lvl in range(1, self.num_levels):
+                for ax in range(self.ndim):
+                    shard0 = self.shards_per_level[0][ax]
+                    shardL = self.shards_per_level[lvl][ax]
+                    shape0 = self.level_shapes[0][ax]
+                    shapeL = self.level_shapes[lvl][ax]
+                    if (shard0 * shapeL) % (shardL * shape0) != 0:
+                        misaligned.append(
+                            f"  level {lvl}, axis {ax}: "
+                            f"shard {shardL} / level {shapeL} is not "
+                            f"proportional to shard {shard0} / level {shape0}"
+                        )
+            if misaligned:
+                warnings.warn(
+                    "write_region(lock=False): shard_shape is not proportional "
+                    "to level downsampling on the following axes. Concurrent "
+                    "writes may corrupt these levels:\n" + "\n".join(misaligned),
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+        resolved = self._resolve_region(region, label="write_region: region")
+        region0_shape = tuple(stop - start for start, stop in resolved)
+
+        arr = (
+            da.from_array(data, chunks="auto") if isinstance(data, np.ndarray) else data
+        )
+
+        if tuple(int(s) for s in arr.shape) != region0_shape:
+            raise ValueError(
+                f"write_region: data shape {tuple(arr.shape)} does not match "
+                f"region extents {region0_shape}."
+            )
+
+        ops = []
+        cur = arr
+        for level_index, level_shape in enumerate(self.level_shapes):
+            if level_index > 0:
+                scales = [
+                    level_shape[ax] / self.level_shapes[0][ax]
+                    for ax in range(self.ndim)
+                ]
+                scaled_shape = tuple(
+                    max(1, int((stop - start) * scales[ax]))
+                    for ax, (start, stop) in enumerate(resolved)
+                )
+                cur = resize(cur, scaled_shape, order=0).astype(arr.dtype)
+
+            # Region at this level: scale start, then use actual data extent
+            region_level: Tuple[slice, ...] = tuple(
+                slice(
+                    int(start * level_shape[ax] / self.level_shapes[0][ax]),
+                    int(start * level_shape[ax] / self.level_shapes[0][ax])
+                    + int(cur.shape[ax]),
+                )
+                for ax, (start, _) in enumerate(resolved)
+            )
+
+            # When lock=False with sharding, rechunk to shard size so each
+            # dask task covers exactly one shard and the write is atomic.
+            # With lock=True (or no shards), use zarr's chunk shape as usual.
+            if not lock and self.zarr_format == 3 and self.shards_per_level is not None:
+                shard_shape_lvl = self.shards_per_level[level_index]
+                region_extents = tuple(int(s) for s in cur.shape)
+                rechunk_shape = tuple(
+                    min(sd, re) for sd, re in zip(shard_shape_lvl, region_extents)
+                )
+                src = cur.rechunk(rechunk_shape)
+            else:
+                src = cur.rechunk(self.datasets[level_index].chunks)
+
+            if self.zarr_format == 2:
+                ops.append(
+                    da.to_zarr(
+                        src,
+                        self.datasets[level_index],
+                        compute=False,
+                        region=region_level,
+                    )
+                )
+            else:
+                ops.append(
+                    da.store(
+                        src,
+                        self.datasets[level_index],
+                        regions=region_level,
+                        lock=lock,
+                        compute=False,
+                    )
+                )
+
+        da.compute(*ops)
+
     # -----------------
     # Internal plumbing
     # -----------------
+
+    def _resolve_region(
+        self,
+        region: Tuple[slice, ...],
+        *,
+        label: str = "region",
+    ) -> List[Tuple[int, int]]:
+        """Resolve a slice tuple into (start, stop) pairs in level-0 space."""
+        if len(region) != self.ndim:
+            raise ValueError(
+                f"{label}: expected {self.ndim} slices, got {len(region)}."
+            )
+        level0 = self.level_shapes[0]
+        resolved: List[Tuple[int, int]] = []
+        for ax, sl in enumerate(region):
+            start = 0 if sl.start is None else int(sl.start)
+            stop = int(level0[ax]) if sl.stop is None else int(sl.stop)
+            if start < 0 or stop > int(level0[ax]) or start >= stop:
+                raise ValueError(
+                    f"{label}[{ax}] = slice({start}, {stop}) is out of bounds "
+                    f"or empty for dim size {level0[ax]}."
+                )
+            resolved.append((start, stop))
+        return resolved
 
     def _initialize(self) -> None:
         """
