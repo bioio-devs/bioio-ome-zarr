@@ -2,6 +2,7 @@ import itertools
 import json
 import math
 import pathlib
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
@@ -678,3 +679,36 @@ def test_write_region_concurrent_matches_full_volume(
         )
 
     assert_valid_ome_zarr(region_store)
+
+
+def test_write_region_is_concurrent(tmp_path: Any) -> None:
+    shape = (4, 1, 1, 32, 32)
+    shard = (1, 1, 1, 16, 16)
+    data = np.zeros(shape, dtype=np.uint16)
+    writer = OMEZarrWriter(
+        store=str(tmp_path / "out.zarr"),
+        level_shapes=[shape],
+        dtype=data.dtype,
+        zarr_format=3,
+        chunk_shape=[(1, 1, 1, 8, 8)],
+        shard_shape=[shard],
+    )
+    writer.initialize()
+
+    coords = list(
+        itertools.product(*[range(shape[ax] // shard[ax]) for ax in range(len(shape))])
+    )
+    barrier = threading.Barrier(len(coords), timeout=5)
+
+    def write_shard(c: Tuple[int, ...]) -> None:
+        region = tuple(
+            slice(c[ax] * shard[ax], (c[ax] + 1) * shard[ax]) for ax in range(len(c))
+        )
+        barrier.wait()
+        writer.write_region(data[region], region)
+
+    try:
+        with ThreadPoolExecutor(max_workers=len(coords)) as pool:
+            list(pool.map(write_shard, coords))
+    except Exception as e:
+        pytest.fail(f"writes did not run concurrently (barrier timed out): {e}")
