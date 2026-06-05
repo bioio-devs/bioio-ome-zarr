@@ -619,11 +619,8 @@ def test_write_region_concurrent_matches_full_volume(
     max_workers: int,
 ) -> None:
     """
-    Write all shards concurrently with write_region(lock=False) and assert every
-    pyramid level matches the output of write_full_volume on the same data.
-
-    The first shard is written synchronously to initialize the zarr store (not
-    thread-safe); remaining shards are written in parallel via a thread pool.
+    Write all shards concurrently with write_region and assert every pyramid
+    level matches the output of write_full_volume on the same data.
     """
     shape0 = level_shapes[0]
     ndim = len(shape0)
@@ -641,7 +638,7 @@ def test_write_region_concurrent_matches_full_volume(
         shard_shape=shard_shapes,
     ).write_full_volume(data)
 
-    # Under test: concurrent write_region(lock=False) per shard
+    # Under test: concurrent write_region per shard
     region_store = str(tmp_path / "region.zarr")
     writer = OMEZarrWriter(
         store=region_store,
@@ -662,14 +659,11 @@ def test_write_region_concurrent_matches_full_volume(
             slice(c * shard0[ax], min((c + 1) * shard0[ax], shape0[ax]))
             for ax, c in enumerate(coords)
         )
-        writer.write_region(data[region], region, lock=False)
+        writer.write_region(data[region], region)
 
-    # First shard initialises the store (single-threaded); rest are concurrent.
-    first, *rest = all_coords
-    write_shard(first)
-    if rest:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            list(pool.map(write_shard, rest))
+    writer.initialize()
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        list(pool.map(write_shard, all_coords))
 
     # Assert every pyramid level matches the reference
     ref_grp = zarr.open_group(ref_store, mode="r")
@@ -679,8 +673,7 @@ def test_write_region_concurrent_matches_full_volume(
             ref_grp[str(lvl)][...],
             region_grp[str(lvl)][...],
             err_msg=(
-                f"Level {lvl} mismatch between write_full_volume "
-                "and concurrent write_region"
+                f"Level {lvl} mismatch between write_full_volume and write_region"
             ),
         )
 

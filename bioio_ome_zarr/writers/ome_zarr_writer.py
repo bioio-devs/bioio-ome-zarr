@@ -1,5 +1,4 @@
-import math
-import warnings
+import threading
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
@@ -348,6 +347,10 @@ class OMEZarrWriter:
             params=params,
         )
 
+    def initialize(self) -> None:
+        if not self._initialized:
+            self._initialize()
+
     def write_full_volume(
         self,
         input_data: Union[np.ndarray, da.Array],
@@ -535,146 +538,37 @@ class OMEZarrWriter:
 
     def write_region(
         self,
-        data: Union[np.ndarray, da.Array],
+        data: np.ndarray,
         region: Tuple[slice, ...],
-        *,
-        lock: bool = True,
+        lock: Optional[threading.Lock] = None,
     ) -> None:
-        """
-        Write data into an arbitrary sub-region across all pyramid levels.
-
-        Parameters
-        ----------
-        data : Union[np.ndarray, dask.array.Array]
-            Array whose shape matches the extents of ``region`` at level 0.
-        region : Tuple[slice, ...]
-            One ``slice`` per axis in level-0 coordinate space.
-            ``slice(None)`` covers the full axis extent.
-        lock : bool
-            Whether to acquire a threading lock on each chunk write (v3 only).
-            Set ``False`` when the region is shard-aligned and callers guarantee
-            no two concurrent writes touch the same shard.
-        """
-        if not self._initialized:
-            self._initialize()
-
-        if (
-            not lock
-            and self.zarr_format == 3
-            and self.shards_per_level is not None
-            and self.num_levels > 1
-        ):
-            misaligned: List[str] = []
-            for lvl in range(1, self.num_levels):
-                for ax in range(self.ndim):
-                    shard0 = self.shards_per_level[0][ax]
-                    shardL = self.shards_per_level[lvl][ax]
-                    shape0 = self.level_shapes[0][ax]
-                    shapeL = self.level_shapes[lvl][ax]
-                    n_shards0 = math.ceil(shape0 / shard0)
-                    n_shardsL = math.ceil(shapeL / shardL)
-                    # Warn only when shard counts differ (one level-0 shard
-                    # maps to multiple level-k shards → read-modify-write risk),
-                    # or when both are multi-shard but boundaries don't align.
-                    # When both axes have a single shard, each write_region call
-                    # lands on a unique shard key via the other axes (e.g. T), so
-                    # there is no read-modify-write regardless of the ratio.
-                    if n_shards0 != n_shardsL or (
-                        n_shards0 > 1 and (shard0 * shapeL) % (shardL * shape0) != 0
-                    ):
-                        misaligned.append(
-                            f"  level {lvl}, axis {ax}: "
-                            f"shard {shardL} / level {shapeL} is not "
-                            f"proportional to shard {shard0} / level {shape0}"
-                        )
-            if misaligned:
-                warnings.warn(
-                    "write_region(lock=False): shard_shape is not proportional "
-                    "to level downsampling on the following axes. Concurrent "
-                    "writes may corrupt these levels:\n" + "\n".join(misaligned),
-                    UserWarning,
-                    stacklevel=2,
-                )
-
-        resolved = self._resolve_region(region, label="write_region: region")
-        region0_shape = tuple(stop - start for start, stop in resolved)
-
-        # Keep numpy input as a single dask chunk.  chunks="auto" would split a
-        # large shard into many small blocks, causing resize() to create one
-        # skimage task per block and compute() to spawn a nested thread pool
-        # inside each pool worker — killing true write concurrency.
-        arr = (
-            da.from_array(data, chunks=data.shape)
-            if isinstance(data, np.ndarray)
-            else data
-        )
-
-        if tuple(int(s) for s in arr.shape) != region0_shape:
-            raise ValueError(
-                f"write_region: data shape {tuple(arr.shape)} does not match "
-                f"region extents {region0_shape}."
-            )
-
-        cur = arr
-        for level_index, level_shape in enumerate(self.level_shapes):
+        level0_shape = self.datasets[0].shape
+        cur = da.from_array(data, chunks=data.shape)
+        region_level: Tuple[slice, ...] = region
+        for level_index, array in enumerate(self.datasets):
             if level_index > 0:
-                scales = [
-                    level_shape[ax] / self.level_shapes[0][ax]
-                    for ax in range(self.ndim)
-                ]
+                scales = [array.shape[ax] / level0_shape[ax] for ax in range(data.ndim)]
                 scaled_shape = tuple(
-                    max(1, int((stop - start) * scales[ax]))
-                    for ax, (start, stop) in enumerate(resolved)
+                    max(1, int((region[ax].stop - region[ax].start) * scales[ax]))
+                    for ax in range(data.ndim)
                 )
-                cur = resize(cur, scaled_shape, order=0).astype(arr.dtype)
+                cur = resize(cur, scaled_shape, order=0).astype(data.dtype)
+                region_level = tuple(
+                    slice(
+                        int(region[ax].start * scales[ax]),
+                        int(region[ax].start * scales[ax]) + int(cur.shape[ax]),
+                    )
+                    for ax in range(data.ndim)
+                )
 
-            # Materialize the current level to numpy once: breaks the lazy
-            # dependency chain back to the original source so the next level's
-            # resize reads from RAM rather than re-triggering source I/O.
-            # synchronous scheduler: this runs inside a ThreadPoolExecutor worker
-            # so we must not let dask spawn its own nested thread pool here.
             np_cur = cur.compute(scheduler="synchronous")
             cur = da.from_array(np_cur, chunks=np_cur.shape)
 
-            # Region at this level: scale start, then use actual data extent
-            region_level: Tuple[slice, ...] = tuple(
-                slice(
-                    int(start * level_shape[ax] / self.level_shapes[0][ax]),
-                    int(start * level_shape[ax] / self.level_shapes[0][ax])
-                    + int(cur.shape[ax]),
-                )
-                for ax, (start, _) in enumerate(resolved)
-            )
-
-            # When lock=False with sharding, rechunk to shard size so each
-            # dask task covers exactly one shard and the write is atomic.
-            # With lock=True (or no shards), use zarr's chunk shape as usual.
-            if not lock and self.zarr_format == 3 and self.shards_per_level is not None:
-                shard_shape_lvl = self.shards_per_level[level_index]
-                region_extents = tuple(int(s) for s in cur.shape)
-                rechunk_shape = tuple(
-                    min(sd, re) for sd, re in zip(shard_shape_lvl, region_extents)
-                )
-                src = cur.rechunk(rechunk_shape)
+            if lock is not None:
+                with lock:
+                    array[region_level] = np_cur
             else:
-                src = cur.rechunk(self.datasets[level_index].chunks)
-
-            if self.zarr_format == 2:
-                da.to_zarr(
-                    src,
-                    self.datasets[level_index],
-                    compute=True,
-                    region=region_level,
-                    scheduler="synchronous",
-                )
-            else:
-                da.store(
-                    src,
-                    self.datasets[level_index],
-                    regions=region_level,
-                    lock=lock,
-                    scheduler="synchronous",
-                )
+                array[region_level] = np_cur
 
     # -----------------
     # Internal plumbing
