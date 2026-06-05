@@ -1,5 +1,8 @@
+import itertools
 import json
+import math
 import pathlib
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import dask.array as da
@@ -582,3 +585,103 @@ def test_full_vs_timepoints_equivalence(
             expected_shard = shard_shape[lvl]
             assert arr_full.shards == expected_shard
             assert arr_tp.shards == expected_shard
+
+
+@pytest.mark.parametrize(
+    "level_shapes, chunk_shapes, shard_shapes, axes_names, max_workers",
+    [
+        # 2 T-shards, single spatial shard per level, 2 pyramid levels (YX halved).
+        # Exactly 2 concurrent writes — one per T-shard.
+        (
+            [(4, 2, 4, 16, 16), (4, 2, 4, 8, 8)],
+            [(1, 1, 1, 8, 8), (1, 1, 1, 8, 8)],
+            [(2, 2, 4, 16, 16), (2, 2, 4, 8, 8)],
+            ["t", "c", "z", "y", "x"],
+            2,
+        ),
+        # 8 shards (2T × 2Y × 2X), 3 pyramid levels (YX halved each time).
+        # All 8 shards written with up to 4 concurrent workers.
+        (
+            [(4, 1, 2, 32, 32), (4, 1, 2, 16, 16), (4, 1, 2, 8, 8)],
+            [(1, 1, 1, 8, 8), (1, 1, 1, 8, 8), (1, 1, 1, 4, 4)],
+            [(2, 1, 2, 16, 16), (2, 1, 2, 8, 8), (2, 1, 2, 4, 4)],
+            ["t", "c", "z", "y", "x"],
+            4,
+        ),
+    ],
+)
+def test_write_region_concurrent_matches_full_volume(
+    tmp_path: Any,
+    level_shapes: List[Tuple[int, ...]],
+    chunk_shapes: List[Tuple[int, ...]],
+    shard_shapes: List[Tuple[int, ...]],
+    axes_names: List[str],
+    max_workers: int,
+) -> None:
+    """
+    Write all shards concurrently with write_region(lock=False) and assert every
+    pyramid level matches the output of write_full_volume on the same data.
+
+    The first shard is written synchronously to initialize the zarr store (not
+    thread-safe); remaining shards are written in parallel via a thread pool.
+    """
+    shape0 = level_shapes[0]
+    ndim = len(shape0)
+    data = np.arange(np.prod(shape0), dtype=np.uint16).reshape(shape0)
+
+    # Reference: write_full_volume
+    ref_store = str(tmp_path / "ref.zarr")
+    OMEZarrWriter(
+        store=ref_store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=3,
+        axes_names=axes_names,
+        chunk_shape=chunk_shapes,
+        shard_shape=shard_shapes,
+    ).write_full_volume(data)
+
+    # Under test: concurrent write_region(lock=False) per shard
+    region_store = str(tmp_path / "region.zarr")
+    writer = OMEZarrWriter(
+        store=region_store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=3,
+        axes_names=axes_names,
+        chunk_shape=chunk_shapes,
+        shard_shape=shard_shapes,
+    )
+
+    shard0 = shard_shapes[0]
+    n_shards_per_ax = tuple(math.ceil(shape0[ax] / shard0[ax]) for ax in range(ndim))
+    all_coords = list(itertools.product(*[range(n) for n in n_shards_per_ax]))
+
+    def write_shard(coords: Tuple[int, ...]) -> None:
+        region = tuple(
+            slice(c * shard0[ax], min((c + 1) * shard0[ax], shape0[ax]))
+            for ax, c in enumerate(coords)
+        )
+        writer.write_region(data[region], region, lock=False)
+
+    # First shard initialises the store (single-threaded); rest are concurrent.
+    first, *rest = all_coords
+    write_shard(first)
+    if rest:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            list(pool.map(write_shard, rest))
+
+    # Assert every pyramid level matches the reference
+    ref_grp = zarr.open_group(ref_store, mode="r")
+    region_grp = zarr.open_group(region_store, mode="r")
+    for lvl in range(len(level_shapes)):
+        np.testing.assert_array_equal(
+            ref_grp[str(lvl)][...],
+            region_grp[str(lvl)][...],
+            err_msg=(
+                f"Level {lvl} mismatch between write_full_volume "
+                "and concurrent write_region"
+            ),
+        )
+
+    assert_valid_ome_zarr(region_store)

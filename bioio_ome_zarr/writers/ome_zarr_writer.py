@@ -1,3 +1,4 @@
+import math
 import warnings
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
@@ -570,7 +571,17 @@ class OMEZarrWriter:
                     shardL = self.shards_per_level[lvl][ax]
                     shape0 = self.level_shapes[0][ax]
                     shapeL = self.level_shapes[lvl][ax]
-                    if (shard0 * shapeL) % (shardL * shape0) != 0:
+                    n_shards0 = math.ceil(shape0 / shard0)
+                    n_shardsL = math.ceil(shapeL / shardL)
+                    # Warn only when shard counts differ (one level-0 shard
+                    # maps to multiple level-k shards → read-modify-write risk),
+                    # or when both are multi-shard but boundaries don't align.
+                    # When both axes have a single shard, each write_region call
+                    # lands on a unique shard key via the other axes (e.g. T), so
+                    # there is no read-modify-write regardless of the ratio.
+                    if n_shards0 != n_shardsL or (
+                        n_shards0 > 1 and (shard0 * shapeL) % (shardL * shape0) != 0
+                    ):
                         misaligned.append(
                             f"  level {lvl}, axis {ax}: "
                             f"shard {shardL} / level {shapeL} is not "
@@ -598,7 +609,6 @@ class OMEZarrWriter:
                 f"region extents {region0_shape}."
             )
 
-        ops = []
         cur = arr
         for level_index, level_shape in enumerate(self.level_shapes):
             if level_index > 0:
@@ -611,6 +621,12 @@ class OMEZarrWriter:
                     for ax, (start, stop) in enumerate(resolved)
                 )
                 cur = resize(cur, scaled_shape, order=0).astype(arr.dtype)
+
+            # Materialize the current level to numpy once: breaks the lazy
+            # dependency chain back to the original source so the next level's
+            # resize reads from RAM rather than re-triggering source I/O.
+            np_cur = cur.compute()
+            cur = da.from_array(np_cur, chunks=np_cur.shape)
 
             # Region at this level: scale start, then use actual data extent
             region_level: Tuple[slice, ...] = tuple(
@@ -636,26 +652,19 @@ class OMEZarrWriter:
                 src = cur.rechunk(self.datasets[level_index].chunks)
 
             if self.zarr_format == 2:
-                ops.append(
-                    da.to_zarr(
-                        src,
-                        self.datasets[level_index],
-                        compute=False,
-                        region=region_level,
-                    )
+                da.to_zarr(
+                    src,
+                    self.datasets[level_index],
+                    compute=True,
+                    region=region_level,
                 )
             else:
-                ops.append(
-                    da.store(
-                        src,
-                        self.datasets[level_index],
-                        regions=region_level,
-                        lock=lock,
-                        compute=False,
-                    )
+                da.store(
+                    src,
+                    self.datasets[level_index],
+                    regions=region_level,
+                    lock=lock,
                 )
-
-        da.compute(*ops)
 
     # -----------------
     # Internal plumbing
