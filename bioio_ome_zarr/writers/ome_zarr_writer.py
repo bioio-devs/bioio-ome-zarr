@@ -599,8 +599,14 @@ class OMEZarrWriter:
         resolved = self._resolve_region(region, label="write_region: region")
         region0_shape = tuple(stop - start for start, stop in resolved)
 
+        # Keep numpy input as a single dask chunk.  chunks="auto" would split a
+        # large shard into many small blocks, causing resize() to create one
+        # skimage task per block and compute() to spawn a nested thread pool
+        # inside each pool worker — killing true write concurrency.
         arr = (
-            da.from_array(data, chunks="auto") if isinstance(data, np.ndarray) else data
+            da.from_array(data, chunks=data.shape)
+            if isinstance(data, np.ndarray)
+            else data
         )
 
         if tuple(int(s) for s in arr.shape) != region0_shape:
@@ -625,7 +631,9 @@ class OMEZarrWriter:
             # Materialize the current level to numpy once: breaks the lazy
             # dependency chain back to the original source so the next level's
             # resize reads from RAM rather than re-triggering source I/O.
-            np_cur = cur.compute()
+            # synchronous scheduler: this runs inside a ThreadPoolExecutor worker
+            # so we must not let dask spawn its own nested thread pool here.
+            np_cur = cur.compute(scheduler="synchronous")
             cur = da.from_array(np_cur, chunks=np_cur.shape)
 
             # Region at this level: scale start, then use actual data extent
@@ -657,6 +665,7 @@ class OMEZarrWriter:
                     self.datasets[level_index],
                     compute=True,
                     region=region_level,
+                    scheduler="synchronous",
                 )
             else:
                 da.store(
@@ -664,6 +673,7 @@ class OMEZarrWriter:
                     self.datasets[level_index],
                     regions=region_level,
                     lock=lock,
+                    scheduler="synchronous",
                 )
 
     # -----------------
