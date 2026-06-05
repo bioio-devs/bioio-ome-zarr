@@ -574,30 +574,6 @@ class OMEZarrWriter:
     # Internal plumbing
     # -----------------
 
-    def _resolve_region(
-        self,
-        region: Tuple[slice, ...],
-        *,
-        label: str = "region",
-    ) -> List[Tuple[int, int]]:
-        """Resolve a slice tuple into (start, stop) pairs in level-0 space."""
-        if len(region) != self.ndim:
-            raise ValueError(
-                f"{label}: expected {self.ndim} slices, got {len(region)}."
-            )
-        level0 = self.level_shapes[0]
-        resolved: List[Tuple[int, int]] = []
-        for ax, sl in enumerate(region):
-            start = 0 if sl.start is None else int(sl.start)
-            stop = int(level0[ax]) if sl.stop is None else int(sl.stop)
-            if start < 0 or stop > int(level0[ax]) or start >= stop:
-                raise ValueError(
-                    f"{label}[{ax}] = slice({start}, {stop}) is out of bounds "
-                    f"or empty for dim size {level0[ax]}."
-                )
-            resolved.append((start, stop))
-        return resolved
-
     def _initialize(self) -> None:
         """
         Open the root group, create arrays for each level, and write metadata
