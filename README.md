@@ -129,8 +129,8 @@ writer.write_full_volume(data)
 * `write_timepoints(data: np.ndarray | dask.array.Array, *, start_T_src=0, start_T_dest=0, total_T: int | None = None) -> None`
   Stream along the **T** axis from `data` into the store. Spatial axes are downsampled for lower levels; **T**/**C** are preserved.
 
-* `write_region(data: np.ndarray, region: tuple[slice, ...], lock: threading.Lock | None = None) -> None`
-  Write one block of level‑0 data into the store at `region`, downsampling and writing the proportional region at every pyramid level. Designed for concurrent, shard‑by‑shard writes (see below). Pass `lock` only when the underlying store is not thread‑safe.
+* `write_region(data: np.ndarray, region: tuple[slice, ...]) -> None`
+  Write one block of level‑0 data into the store at `region`, downsampling and writing the proportional region at every pyramid level. Designed for concurrent, shard‑aligned writes (see below); when each region maps to its own shard at every level, writes are race‑free without any locking.
 
 * `initialize() -> None`
   Eagerly create the root group, per‑level arrays, and metadata (otherwise done lazily on first write). Call once before issuing concurrent `write_region` calls.

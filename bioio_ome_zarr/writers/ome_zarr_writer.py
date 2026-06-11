@@ -1,4 +1,3 @@
-import threading
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
@@ -578,7 +577,6 @@ class OMEZarrWriter:
         self,
         data: np.ndarray,
         region: Tuple[slice, ...],
-        lock: Optional[threading.Lock] = None,
     ) -> None:
         level0_shape = self.datasets[0].shape
         cur = da.from_array(data, chunks=data.shape)
@@ -602,11 +600,7 @@ class OMEZarrWriter:
             np_cur = cur.compute(scheduler="synchronous")
             cur = da.from_array(np_cur, chunks=np_cur.shape)
 
-            if lock is not None:
-                with lock:
-                    array[region_level] = np_cur
-            else:
-                array[region_level] = np_cur
+            array[region_level] = np_cur
 
     # -----------------
     # Internal plumbing
