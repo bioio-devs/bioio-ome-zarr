@@ -351,6 +351,44 @@ class OMEZarrWriter:
         if not self._initialized:
             self._initialize()
 
+    @classmethod
+    def open(cls, store: Union[str, zarr.storage.StoreLike]) -> "OMEZarrWriter":
+        """
+        Attach a writer to an existing, already-initialized OME-Zarr store so
+        its regions can be written via :meth:`write_region`, without creating or
+        modifying any arrays or metadata.
+
+        This is the multiprocess-friendly counterpart to constructing a writer
+        and calling :meth:`initialize`: one process initializes the store, then
+        each worker calls ``OMEZarrWriter.open(store)`` and writes a disjoint
+        region. The per-level arrays ("0", "1", ...) are opened from the store
+        into ``datasets``.
+
+        Parameters
+        ----------
+        store : Union[str, zarr.storage.StoreLike]
+            Path/URL or store of an existing OME-Zarr group.
+
+        Returns
+        -------
+        OMEZarrWriter
+            A writer whose ``datasets`` reference the store's level arrays.
+        """
+        self = cls.__new__(cls)
+        self.store = store
+        self.root = zarr.open_group(store, mode="r+")
+        self.datasets = []
+        level = 0
+        while str(level) in self.root:
+            self.datasets.append(self.root[str(level)])
+            level += 1
+        if not self.datasets:
+            raise ValueError(
+                f"No multiscale level arrays ('0', '1', ...) found in {store!r}."
+            )
+        self._initialized = True
+        return self
+
     def write_full_volume(
         self,
         input_data: Union[np.ndarray, da.Array],

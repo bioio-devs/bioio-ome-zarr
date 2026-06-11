@@ -712,3 +712,38 @@ def test_write_region_is_concurrent(tmp_path: Any) -> None:
             list(pool.map(write_shard, coords))
     except Exception as e:
         pytest.fail(f"writes did not run concurrently (barrier timed out): {e}")
+
+
+def test_open_attaches_to_existing_store(tmp_path: pathlib.Path) -> None:
+    """
+    OMEZarrWriter.open attaches to an already-initialized store and writes a
+    region via the public API, without re-creating arrays — the entry point a
+    separate (e.g. worker) process uses to write into a parent-created store.
+    """
+    store = str(tmp_path / "open_test.zarr")
+    shape = (2, 16, 16)
+    OMEZarrWriter(
+        store=store,
+        level_shapes=[shape, (2, 8, 8)],
+        dtype="uint16",
+        zarr_format=3,
+        axes_names=["c", "y", "x"],
+    ).initialize()
+
+    data = np.arange(int(np.prod(shape)), dtype="uint16").reshape(shape)
+
+    attached = OMEZarrWriter.open(store)
+    assert len(attached.datasets) == 2
+    assert [tuple(a.shape) for a in attached.datasets] == [shape, (2, 8, 8)]
+    attached.write_region(data, (slice(0, 2), slice(0, 16), slice(0, 16)))
+
+    grp = zarr.open_group(store, mode="r")
+    np.testing.assert_array_equal(grp["0"][...], data)
+
+
+def test_open_rejects_store_without_levels(tmp_path: pathlib.Path) -> None:
+    """open() on a group with no multiscale level arrays raises ValueError."""
+    store = str(tmp_path / "empty.zarr")
+    zarr.open_group(store, mode="w")  # group with no "0"/"1"/... arrays
+    with pytest.raises(ValueError, match="No multiscale level arrays"):
+        OMEZarrWriter.open(store)
