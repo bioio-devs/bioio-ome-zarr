@@ -129,6 +129,15 @@ writer.write_full_volume(data)
 * `write_timepoints(data: np.ndarray | dask.array.Array, *, start_T_src=0, start_T_dest=0, total_T: int | None = None) -> None`
   Stream along the **T** axis from `data` into the store. Spatial axes are downsampled for lower levels; **T**/**C** are preserved.
 
+* `write_region(data: np.ndarray, region: tuple[slice, ...], lock: threading.Lock | None = None) -> None`
+  Write one block of level‑0 data into the store at `region`, downsampling and writing the proportional region at every pyramid level. Designed for concurrent, shard‑by‑shard writes (see below). Pass `lock` only when the underlying store is not thread‑safe.
+
+* `initialize() -> None`
+  Eagerly create the root group, per‑level arrays, and metadata (otherwise done lazily on first write). Call once before issuing concurrent `write_region` calls.
+
+* `OMEZarrWriter.open(store) -> OMEZarrWriter` *(classmethod)*
+  Attach a writer to an **already‑initialized** store and write regions into it without re‑creating arrays or metadata. This is the multiprocess‑friendly counterpart to `initialize()`: one process creates the store, each worker process calls `open(store)` and writes a disjoint region.
+
 * `preview_metadata() -> dict[str, Any]`
   Returns the NGFF metadata dict(s) that would be written (no IO).
 
@@ -172,6 +181,71 @@ writer.write_timepoints(
     start_T_dest=50,
     total_T=10,
 )
+```
+
+### Writing regions concurrently (shard-by-shard)
+
+`write_region` writes one block of level‑0 data at a given `region` and
+automatically downsamples and writes the proportional region into every pyramid
+level. Because each call only holds one block (plus its downsampled copy) in
+memory, it lets you fan a large volume out across threads or processes without
+materializing the whole array — ideal for converting large images (tens of GB)
+where one shard per worker is all that fits in RAM.
+
+For best performance, align each `region` to the store's **shard** boundaries so
+no two concurrent writes touch the same shard and Zarr never has to
+read‑modify‑write a shard.
+
+```python
+import itertools, math
+from concurrent.futures import ThreadPoolExecutor
+import numpy as np
+from bioio_ome_zarr.writers import OMEZarrWriter
+
+level_shapes = [(4, 1, 1, 64, 64), (4, 1, 1, 32, 32)]
+shard_shape = (1, 1, 1, 32, 32)
+chunk_shape = (1, 1, 1, 16, 16)
+
+data = np.random.randint(0, 65535, size=level_shapes[0], dtype=np.uint16)
+
+writer = OMEZarrWriter(
+    store="region.zarr",
+    level_shapes=level_shapes,
+    dtype=data.dtype,
+    zarr_format=3,           # write_region targets Zarr v3
+    chunk_shape=chunk_shape,
+    shard_shape=shard_shape,
+)
+
+# Create arrays + metadata once before fanning out writes.
+writer.initialize()
+
+shape0 = level_shapes[0]
+n_shards = tuple(math.ceil(shape0[ax] / shard_shape[ax]) for ax in range(len(shape0)))
+
+def write_shard(coords):
+    region = tuple(
+        slice(c * shard_shape[ax], min((c + 1) * shard_shape[ax], shape0[ax]))
+        for ax, c in enumerate(coords)
+    )
+    writer.write_region(data[region], region)
+
+with ThreadPoolExecutor() as pool:
+    list(pool.map(write_shard, itertools.product(*[range(n) for n in n_shards])))
+```
+
+#### Writing into an existing store from separate processes
+
+When workers run in **separate processes** (not just threads), have one process
+initialize the store, then have each worker attach to it with
+`OMEZarrWriter.open(store)` and write its own disjoint region:
+
+```python
+from bioio_ome_zarr.writers import OMEZarrWriter
+
+# Worker process: attach to the parent-initialized store and write one region.
+writer = OMEZarrWriter.open("region.zarr")
+writer.write_region(block, region)
 ```
 
 ### Custom chunking per level
