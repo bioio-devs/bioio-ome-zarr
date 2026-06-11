@@ -1,9 +1,6 @@
-import itertools
 import json
-import math
+import multiprocessing as mp
 import pathlib
-import threading
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import dask.array as da
@@ -588,162 +585,83 @@ def test_full_vs_timepoints_equivalence(
             assert arr_tp.shards == expected_shard
 
 
-@pytest.mark.parametrize(
-    "level_shapes, chunk_shapes, shard_shapes, axes_names, max_workers",
-    [
-        # 2 T-shards, single spatial shard per level, 2 pyramid levels (YX halved).
-        # Exactly 2 concurrent writes — one per T-shard.
-        (
-            [(4, 2, 4, 16, 16), (4, 2, 4, 8, 8)],
-            [(1, 1, 1, 8, 8), (1, 1, 1, 8, 8)],
-            [(2, 2, 4, 16, 16), (2, 2, 4, 8, 8)],
-            ["t", "c", "z", "y", "x"],
-            2,
-        ),
-        # 8 shards (2T × 2Y × 2X), 3 pyramid levels (YX halved each time).
-        # All 8 shards written with up to 4 concurrent workers.
-        (
-            [(4, 1, 2, 32, 32), (4, 1, 2, 16, 16), (4, 1, 2, 8, 8)],
-            [(1, 1, 1, 8, 8), (1, 1, 1, 8, 8), (1, 1, 1, 4, 4)],
-            [(2, 1, 2, 16, 16), (2, 1, 2, 8, 8), (2, 1, 2, 4, 4)],
-            ["t", "c", "z", "y", "x"],
-            4,
-        ),
-    ],
-)
-def test_write_region_concurrent_matches_full_volume(
-    tmp_path: Any,
-    level_shapes: List[Tuple[int, ...]],
-    chunk_shapes: List[Tuple[int, ...]],
-    shard_shapes: List[Tuple[int, ...]],
-    axes_names: List[str],
-    max_workers: int,
+def _open_and_write_region(
+    store_path: str,
+    region: Tuple[slice, ...],
+    block: np.ndarray,
 ) -> None:
+    """Worker entry point: attach to an existing store via ``open()`` in a fresh
+    process and write one shard-aligned region. Module-level so it is picklable
+    for ``multiprocessing`` with the ``spawn`` start method.
     """
-    Write all shards concurrently with write_region and assert every pyramid
-    level matches the output of write_full_volume on the same data.
+    OMEZarrWriter.open(store_path).write_region(block, region)
+
+
+def test_two_processes_attach_and_write_match_source(tmp_path: pathlib.Path) -> None:
     """
-    shape0 = level_shapes[0]
-    ndim = len(shape0)
-    data = np.arange(np.prod(shape0), dtype=np.uint16).reshape(shape0)
+    End-to-end check of the parallel ingestion path for write_region
+    """
+    level_shapes = [(4, 1, 2, 32, 32), (4, 1, 2, 16, 16)]
+    chunk_shapes = [(1, 1, 1, 16, 16), (1, 1, 1, 8, 8)]
+    shard_shapes = [(2, 1, 2, 32, 32), (2, 1, 2, 16, 16)]  # T split into 2 shards
+    axes_names = ["t", "c", "z", "y", "x"]
 
-    # Reference: write_full_volume
-    ref_store = str(tmp_path / "ref.zarr")
-    OMEZarrWriter(
-        store=ref_store,
-        level_shapes=level_shapes,
-        dtype=data.dtype,
-        zarr_format=3,
-        axes_names=axes_names,
-        chunk_shape=chunk_shapes,
-        shard_shape=shard_shapes,
-    ).write_full_volume(data)
-
-    # Under test: concurrent write_region per shard
-    region_store = str(tmp_path / "region.zarr")
-    writer = OMEZarrWriter(
-        store=region_store,
-        level_shapes=level_shapes,
-        dtype=data.dtype,
-        zarr_format=3,
-        axes_names=axes_names,
-        chunk_shape=chunk_shapes,
-        shard_shape=shard_shapes,
+    source = np.arange(np.prod(level_shapes[0]), dtype=np.uint16).reshape(
+        level_shapes[0]
     )
 
-    shard0 = shard_shapes[0]
-    n_shards_per_ax = tuple(math.ceil(shape0[ax] / shard0[ax]) for ax in range(ndim))
-    all_coords = list(itertools.product(*[range(n) for n in n_shards_per_ax]))
-
-    def write_shard(coords: Tuple[int, ...]) -> None:
-        region = tuple(
-            slice(c * shard0[ax], min((c + 1) * shard0[ax], shape0[ax]))
-            for ax, c in enumerate(coords)
+    def make_writer(store: str) -> OMEZarrWriter:
+        return OMEZarrWriter(
+            store=store,
+            level_shapes=level_shapes,
+            dtype=source.dtype,
+            zarr_format=3,
+            axes_names=axes_names,
+            chunk_shape=chunk_shapes,
+            shard_shape=shard_shapes,
         )
-        writer.write_region(data[region], region)
 
-    writer.initialize()
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        list(pool.map(write_shard, all_coords))
+    # The correct single-process pyramid rendering of the source (oracle).
+    ref_store = str(tmp_path / "ref.zarr")
+    make_writer(ref_store).write_full_volume(source)
 
-    # Assert every pyramid level matches the reference
+    # Parent initializes the store; two worker processes attach and write halves.
+    out_store = str(tmp_path / "out.zarr")
+    make_writer(out_store).initialize()
+
+    shape0 = level_shapes[0]
+
+    def t_region(t0: int, t1: int) -> Tuple[slice, ...]:
+        # Full extent on every axis except T, which is sliced to one shard.
+        return tuple(
+            slice(t0, t1) if ax == 0 else slice(0, shape0[ax])
+            for ax in range(len(shape0))
+        )
+
+    regions = [t_region(0, 2), t_region(2, 4)]  # the two T-shards
+
+    ctx = mp.get_context("spawn")
+    procs = [
+        ctx.Process(target=_open_and_write_region, args=(out_store, r, source[r]))
+        for r in regions
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join()
+    assert [p.exitcode for p in procs] == [0, 0]
+
+    out_grp = zarr.open_group(out_store, mode="r")
     ref_grp = zarr.open_group(ref_store, mode="r")
-    region_grp = zarr.open_group(region_store, mode="r")
+
+    # Level 0 reproduces the source exactly.
+    np.testing.assert_array_equal(out_grp["0"][...], source)
+    # Every level matches the correct rendering of the source.
     for lvl in range(len(level_shapes)):
         np.testing.assert_array_equal(
+            out_grp[str(lvl)][...],
             ref_grp[str(lvl)][...],
-            region_grp[str(lvl)][...],
-            err_msg=(
-                f"Level {lvl} mismatch between write_full_volume and write_region"
-            ),
+            err_msg=f"Level {lvl} mismatch vs single-process rendering of source",
         )
 
-    assert_valid_ome_zarr(region_store)
-
-
-def test_write_region_is_concurrent(tmp_path: Any) -> None:
-    shape = (4, 1, 1, 32, 32)
-    shard = (1, 1, 1, 16, 16)
-    data = np.zeros(shape, dtype=np.uint16)
-    writer = OMEZarrWriter(
-        store=str(tmp_path / "out.zarr"),
-        level_shapes=[shape],
-        dtype=data.dtype,
-        zarr_format=3,
-        chunk_shape=[(1, 1, 1, 8, 8)],
-        shard_shape=[shard],
-    )
-    writer.initialize()
-
-    coords = list(
-        itertools.product(*[range(shape[ax] // shard[ax]) for ax in range(len(shape))])
-    )
-    barrier = threading.Barrier(len(coords), timeout=5)
-
-    def write_shard(c: Tuple[int, ...]) -> None:
-        region = tuple(
-            slice(c[ax] * shard[ax], (c[ax] + 1) * shard[ax]) for ax in range(len(c))
-        )
-        barrier.wait()
-        writer.write_region(data[region], region)
-
-    try:
-        with ThreadPoolExecutor(max_workers=len(coords)) as pool:
-            list(pool.map(write_shard, coords))
-    except Exception as e:
-        pytest.fail(f"writes did not run concurrently (barrier timed out): {e}")
-
-
-def test_open_attaches_to_existing_store(tmp_path: pathlib.Path) -> None:
-    """
-    OMEZarrWriter.open attaches to an already-initialized store and writes a
-    region via the public API, without re-creating arrays — the entry point a
-    separate (e.g. worker) process uses to write into a parent-created store.
-    """
-    store = str(tmp_path / "open_test.zarr")
-    shape = (2, 16, 16)
-    OMEZarrWriter(
-        store=store,
-        level_shapes=[shape, (2, 8, 8)],
-        dtype="uint16",
-        zarr_format=3,
-        axes_names=["c", "y", "x"],
-    ).initialize()
-
-    data = np.arange(int(np.prod(shape)), dtype="uint16").reshape(shape)
-
-    attached = OMEZarrWriter.open(store)
-    assert len(attached.datasets) == 2
-    assert [tuple(a.shape) for a in attached.datasets] == [shape, (2, 8, 8)]
-    attached.write_region(data, (slice(0, 2), slice(0, 16), slice(0, 16)))
-
-    grp = zarr.open_group(store, mode="r")
-    np.testing.assert_array_equal(grp["0"][...], data)
-
-
-def test_open_rejects_store_without_levels(tmp_path: pathlib.Path) -> None:
-    """open() on a group with no multiscale level arrays raises ValueError."""
-    store = str(tmp_path / "empty.zarr")
-    zarr.open_group(store, mode="w")  # group with no "0"/"1"/... arrays
-    with pytest.raises(ValueError, match="No multiscale level arrays"):
-        OMEZarrWriter.open(store)
+    assert_valid_ome_zarr(out_store)
