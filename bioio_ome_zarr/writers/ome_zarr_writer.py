@@ -347,6 +347,21 @@ class OMEZarrWriter:
         )
 
     def initialize(self) -> None:
+        """
+        Eagerly create the root group, per-level arrays, and metadata on the
+        store.
+
+        This commits the pyramid's shape to disk up front. Calling it is
+        optional for single-process use (the write methods initialize lazily on
+        first write), but it is required for concurrent writes: call it once,
+        before spawning workers, so competing processes/threads do not race to
+        create the same arrays and metadata. After it returns, pass the store to
+        :meth:`open` in each worker.
+
+        Idempotent: a no-op if the writer is already initialized. It is not
+        itself thread-safe, so invoke it from a single process before any
+        concurrent :meth:`write_region` calls begin.
+        """
         if not self._initialized:
             self._initialize()
 
@@ -578,6 +593,9 @@ class OMEZarrWriter:
         data: np.ndarray,
         region: Tuple[slice, ...],
     ) -> None:
+        if not self._initialized:
+            self._initialize()
+
         level0_shape = self.datasets[0].shape
         cur = da.from_array(data, chunks=data.shape)
         region_level: Tuple[slice, ...] = region
