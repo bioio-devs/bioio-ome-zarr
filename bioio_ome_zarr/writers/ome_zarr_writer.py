@@ -590,6 +590,25 @@ class OMEZarrWriter:
         data: np.ndarray,
         region: Tuple[slice, ...],
     ) -> None:
+        """
+        Write one in-memory block into a region of every pyramid level.
+
+        The block is written verbatim at level 0, then iteratively downsampled
+        and written to the proportional region of each lower level. Each level
+        is materialized before the next, so peak memory stays close to a single
+        block (plus its downsampled copy) rather than the whole image.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            Block in writer axis order. Its shape must equal the level-0 extent
+            of ``region`` (i.e. ``stop - start`` for each axis).
+        region : Tuple[slice, ...]
+            One slice per axis giving the destination region at level 0. Slices
+            should use explicit ``start``/``stop`` (no ``None``); the lower-level
+            regions are derived by scaling these bounds.
+
+        """
         self._initialize()
 
         level0_shape = self.datasets[0].shape
