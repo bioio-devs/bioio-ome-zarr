@@ -362,8 +362,7 @@ class OMEZarrWriter:
         itself thread-safe, so invoke it from a single process before any
         concurrent :meth:`write_region` calls begin.
         """
-        if not self._initialized:
-            self._initialize()
+        self._initialize()
 
     @classmethod
     def open(cls, store: Union[str, zarr.storage.StoreLike]) -> "OMEZarrWriter":
@@ -416,8 +415,7 @@ class OMEZarrWriter:
             Array matching level-0 shape. If NumPy, it will be wrapped into a
             Dask array with level-0 chunking.
         """
-        if not self._initialized:
-            self._initialize()
+        self._initialize()
 
         cur = (
             input_data
@@ -480,8 +478,7 @@ class OMEZarrWriter:
             that fits within both the source (from ``start_T_src``) and destination
             (from ``start_T_dest``).
         """
-        if not self._initialized:
-            self._initialize()
+        self._initialize()
 
         writer_axes = [a.lower() for a in self.axes.names]
         if "t" not in writer_axes:
@@ -593,8 +590,7 @@ class OMEZarrWriter:
         data: np.ndarray,
         region: Tuple[slice, ...],
     ) -> None:
-        if not self._initialized:
-            self._initialize()
+        self._initialize()
 
         level0_shape = self.datasets[0].shape
         cur = da.from_array(data, chunks=data.shape)
@@ -628,7 +624,12 @@ class OMEZarrWriter:
         """
         Open the root group, create arrays for each level, and write metadata
         once. Subsequent writes reuse the created arrays.
+
+        Idempotent: a no-op if the writer is already initialized.
         """
+        if self._initialized:
+            return
+
         self.root = self._open_root()
 
         if self.compressor is None:
