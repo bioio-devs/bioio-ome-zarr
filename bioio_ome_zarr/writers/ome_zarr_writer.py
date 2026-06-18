@@ -346,6 +346,62 @@ class OMEZarrWriter:
             params=params,
         )
 
+    def initialize(self) -> None:
+        """
+        Eagerly create the root group, per-level arrays, and metadata on the
+        store.
+
+        This commits the pyramid's shape to disk up front. Calling it is
+        optional for single-process use (the write methods initialize lazily on
+        first write), but it is required for concurrent writes: call it once,
+        before spawning workers, so competing processes/threads do not race to
+        create the same arrays and metadata. After it returns, pass the store to
+        :meth:`open` in each worker.
+
+        Idempotent: a no-op if the writer is already initialized. It is not
+        itself thread-safe, so invoke it from a single process before any
+        concurrent :meth:`write_region` calls begin.
+        """
+        self._initialize()
+
+    @classmethod
+    def open(cls, store: Union[str, zarr.storage.StoreLike]) -> "OMEZarrWriter":
+        """
+        Attach a writer to an existing, already-initialized OME-Zarr store so
+        its regions can be written via :meth:`write_region`, without creating or
+        modifying any arrays or metadata.
+
+        This is the multiprocess-friendly counterpart to constructing a writer
+        and calling :meth:`initialize`: one process initializes the store, then
+        each worker calls ``OMEZarrWriter.open(store)`` and writes a disjoint
+        region. The per-level arrays ("0", "1", ...) are opened from the store
+        into ``datasets``.
+
+        Parameters
+        ----------
+        store : Union[str, zarr.storage.StoreLike]
+            Path/URL or store of an existing OME-Zarr group.
+
+        Returns
+        -------
+        OMEZarrWriter
+            A writer whose ``datasets`` reference the store's level arrays.
+        """
+        self = cls.__new__(cls)
+        self.store = store
+        self.root = zarr.open_group(store, mode="r+")
+        self.datasets = []
+        level = 0
+        while str(level) in self.root:
+            self.datasets.append(self.root[str(level)])
+            level += 1
+        if not self.datasets:
+            raise ValueError(
+                f"No multiscale level arrays ('0', '1', ...) found in {store!r}."
+            )
+        self._initialized = True
+        return self
+
     def write_full_volume(
         self,
         input_data: Union[np.ndarray, da.Array],
@@ -359,8 +415,7 @@ class OMEZarrWriter:
             Array matching level-0 shape. If NumPy, it will be wrapped into a
             Dask array with level-0 chunking.
         """
-        if not self._initialized:
-            self._initialize()
+        self._initialize()
 
         cur = (
             input_data
@@ -423,8 +478,7 @@ class OMEZarrWriter:
             that fits within both the source (from ``start_T_src``) and destination
             (from ``start_T_dest``).
         """
-        if not self._initialized:
-            self._initialize()
+        self._initialize()
 
         writer_axes = [a.lower() for a in self.axes.names]
         if "t" not in writer_axes:
@@ -531,6 +585,56 @@ class OMEZarrWriter:
         # compute and let dask optimize
         da.compute(*ops)
 
+    def write_region(
+        self,
+        data: np.ndarray,
+        region: Tuple[slice, ...],
+    ) -> None:
+        """
+        Write one in-memory block into a region of every pyramid level.
+
+        The block is written verbatim at level 0, then iteratively downsampled
+        and written to the proportional region of each lower level. Each level
+        is materialized before the next, so peak memory stays close to a single
+        block (plus its downsampled copy) rather than the whole image.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            Block in writer axis order. Its shape must equal the level-0 extent
+            of ``region`` (i.e. ``stop - start`` for each axis).
+        region : Tuple[slice, ...]
+            One slice per axis giving the destination region at level 0. Slices
+            should use explicit ``start``/``stop`` (no ``None``); the lower-level
+            regions are derived by scaling these bounds.
+
+        """
+        self._initialize()
+
+        level0_shape = self.datasets[0].shape
+        cur = da.from_array(data, chunks=data.shape)
+        region_level: Tuple[slice, ...] = region
+        for level_index, array in enumerate(self.datasets):
+            if level_index > 0:
+                scales = [array.shape[ax] / level0_shape[ax] for ax in range(data.ndim)]
+                scaled_shape = tuple(
+                    max(1, int((region[ax].stop - region[ax].start) * scales[ax]))
+                    for ax in range(data.ndim)
+                )
+                cur = resize(cur, scaled_shape, order=0).astype(data.dtype)
+                region_level = tuple(
+                    slice(
+                        int(region[ax].start * scales[ax]),
+                        int(region[ax].start * scales[ax]) + int(cur.shape[ax]),
+                    )
+                    for ax in range(data.ndim)
+                )
+
+            np_cur = cur.compute(scheduler="synchronous")
+            cur = da.from_array(np_cur, chunks=np_cur.shape)
+
+            array[region_level] = np_cur
+
     # -----------------
     # Internal plumbing
     # -----------------
@@ -539,7 +643,12 @@ class OMEZarrWriter:
         """
         Open the root group, create arrays for each level, and write metadata
         once. Subsequent writes reuse the created arrays.
+
+        Idempotent: a no-op if the writer is already initialized.
         """
+        if self._initialized:
+            return
+
         self.root = self._open_root()
 
         if self.compressor is None:

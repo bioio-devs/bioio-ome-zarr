@@ -1,4 +1,5 @@
 import json
+import multiprocessing as mp
 import pathlib
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
@@ -582,3 +583,85 @@ def test_full_vs_timepoints_equivalence(
             expected_shard = shard_shape[lvl]
             assert arr_full.shards == expected_shard
             assert arr_tp.shards == expected_shard
+
+
+def _open_and_write_region(
+    store_path: str,
+    region: Tuple[slice, ...],
+    block: np.ndarray,
+) -> None:
+    """Worker entry point: attach to an existing store via ``open()`` in a fresh
+    process and write one shard-aligned region. Module-level so it is picklable
+    for ``multiprocessing`` with the ``spawn`` start method.
+    """
+    OMEZarrWriter.open(store_path).write_region(block, region)
+
+
+def test_two_processes_attach_and_write_match_source(tmp_path: pathlib.Path) -> None:
+    """
+    End-to-end check of the parallel ingestion path for write_region
+    """
+    level_shapes = [(4, 1, 2, 32, 32), (4, 1, 2, 16, 16)]
+    chunk_shapes = [(1, 1, 1, 16, 16), (1, 1, 1, 8, 8)]
+    shard_shapes = [(2, 1, 2, 32, 32), (2, 1, 2, 16, 16)]  # T split into 2 shards
+    axes_names = ["t", "c", "z", "y", "x"]
+
+    source = np.arange(np.prod(level_shapes[0]), dtype=np.uint16).reshape(
+        level_shapes[0]
+    )
+
+    def make_writer(store: str) -> OMEZarrWriter:
+        return OMEZarrWriter(
+            store=store,
+            level_shapes=level_shapes,
+            dtype=source.dtype,
+            zarr_format=3,
+            axes_names=axes_names,
+            chunk_shape=chunk_shapes,
+            shard_shape=shard_shapes,
+        )
+
+    # The correct single-process pyramid rendering of the source (oracle).
+    ref_store = str(tmp_path / "ref.zarr")
+    make_writer(ref_store).write_full_volume(source)
+
+    # Parent initializes the store; two worker processes attach and write halves.
+    out_store = str(tmp_path / "out.zarr")
+    make_writer(out_store).initialize()
+
+    shape0 = level_shapes[0]
+
+    def t_region(t0: int, t1: int) -> Tuple[slice, ...]:
+        # Full extent on every axis except T, which is sliced to one shard.
+        return tuple(
+            slice(t0, t1) if ax == 0 else slice(0, shape0[ax])
+            for ax in range(len(shape0))
+        )
+
+    regions = [t_region(0, 2), t_region(2, 4)]  # the two T-shards
+
+    ctx = mp.get_context("spawn")
+    procs = [
+        ctx.Process(target=_open_and_write_region, args=(out_store, r, source[r]))
+        for r in regions
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join()
+    assert [p.exitcode for p in procs] == [0, 0]
+
+    out_grp = zarr.open_group(out_store, mode="r")
+    ref_grp = zarr.open_group(ref_store, mode="r")
+
+    # Level 0 reproduces the source exactly.
+    np.testing.assert_array_equal(out_grp["0"][...], source)
+    # Every level matches the correct rendering of the source.
+    for lvl in range(len(level_shapes)):
+        np.testing.assert_array_equal(
+            out_grp[str(lvl)][...],
+            ref_grp[str(lvl)][...],
+            err_msg=f"Level {lvl} mismatch vs single-process rendering of source",
+        )
+
+    assert_valid_ome_zarr(out_store)
