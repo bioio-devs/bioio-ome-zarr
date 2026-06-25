@@ -55,8 +55,10 @@ class Axes:
         Number of dimensions in the image data.
     names : List[str]
         Names of each axis (e.g., ["t", "c", "z", "y", "x"]).
-    types : List[str]
+    types : List[Optional[str]]
         NGFF axis types for each axis (e.g., "time", "channel", "space").
+        ``None`` for an unrecognized (custom) axis, which is rendered without
+        a ``type`` key.
     units : List[Optional[str]]
         Physical units for each axis, if any (e.g., "micrometer").
     scales : List[float]
@@ -69,6 +71,20 @@ class Axes:
     DEFAULT_TYPES: List[str] = ["time", "channel", "space", "space", "space"]
     DEFAULT_UNITS: List[Optional[str]] = [None, None, None, None, None]
     DEFAULT_SCALES: List[float] = [1.0, 1.0, 1.0, 1.0, 1.0]
+
+    # NGFF axis type for each recognized axis name. Used to infer types.
+    NAME_TO_TYPE: Dict[str, str] = {
+        "t": "time",
+        "c": "channel",
+        "z": "space",
+        "y": "space",
+        "x": "space",
+    }
+
+    @classmethod
+    def _infer_type(cls, name: str) -> Optional[str]:
+        """NGFF type for an axis name, or ``None`` for an unrecognized."""
+        return cls.NAME_TO_TYPE.get(name.lower())
 
     def __init__(
         self,
@@ -84,9 +100,11 @@ class Axes:
         self.names = list(
             names[-ndim:] if names is not None else self.DEFAULT_NAMES[-ndim:]
         )
-        self.types = list(
-            types[-ndim:] if types is not None else self.DEFAULT_TYPES[-ndim:]
-        )
+        self.types: List[Optional[str]]
+        if types is not None:
+            self.types = [t for t in types[-ndim:]]
+        else:
+            self.types = [self._infer_type(n) for n in self.names]
         self.units = list(
             units[-ndim:] if units is not None else self.DEFAULT_UNITS[-ndim:]
         )
@@ -108,7 +126,9 @@ class Axes:
         """Return NGFF-style axis dicts with keys: name, type, and optional unit."""
         out: List[Dict[str, Any]] = []
         for n, t, u in zip(self.names, self.types, self.units):
-            d: Dict[str, Any] = {"name": n, "type": t}
+            d: Dict[str, Any] = {"name": n}
+            if t is not None:
+                d["type"] = t
             if u is not None:
                 d["unit"] = u
             out.append(d)
