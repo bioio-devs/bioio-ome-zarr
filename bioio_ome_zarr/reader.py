@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import logging
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -639,14 +639,45 @@ class Reader(reader.Reader):
             return None
 
     @property
+    def _time_interval_seconds(self) -> Optional[float]:
+        """
+        The T-axis interval in seconds, or None if there is no time axis.
+
+        ``time_interval`` is the raw T-axis scale; this converts it to seconds
+        using the axis unit the reader parses (see ``dimension_properties``).
+        Falls back to treating the scale as seconds when no unit is recorded or
+        the conversion fails.
+        """
+        interval = self.time_interval
+        if interval is None:
+            return None
+        unit = self.dimension_properties.T.unit
+        if unit is None:
+            return float(interval)
+        try:
+            return float((interval * unit).to(types.ureg.second).magnitude)
+        except Exception as exc:
+            log.warning(
+                "Could not convert T interval %r %s to seconds: %s",
+                interval,
+                unit,
+                exc,
+            )
+            return float(interval)
+
+    @property
     def standard_metadata(self) -> StandardMetadata:
         """
         Return the standard metadata for this reader, updating specific fields.
 
         This implementation calls the base reader's standard_metadata property
-        via super() and then assigns the values recorded in the root "bioio"
-        provenance block (written by bioio-conversion) for fields an OME-Zarr
-        store cannot derive on its own.
+        via super() and then assigns:
+
+        * fields recorded in the root "bioio" provenance block (written by
+          bioio-conversion) that an OME-Zarr store cannot derive on its own, and
+        * the T-based durations (``timelapse_interval``, ``total_time_duration``)
+          derived from the T-axis scale and unit, which the base reader leaves
+          unset for OME-Zarr because it has no per-plane timing.
         """
         metadata = super().standard_metadata
         metadata.objective = self.objective
@@ -656,4 +687,14 @@ class Reader(reader.Reader):
         metadata.position_index = self.position_index
         metadata.imaging_datetime = self.imaging_datetime
         metadata.imaged_by = self.imaged_by
+
+        interval_seconds = self._time_interval_seconds
+        if interval_seconds is not None:
+            metadata.timelapse_interval = timedelta(seconds=interval_seconds)
+            size_t = getattr(self.dims, dimensions.DimensionNames.Time, None)
+            if size_t is not None and size_t >= 2:
+                metadata.total_time_duration = timedelta(
+                    seconds=interval_seconds * (size_t - 1)
+                )
+
         return metadata
