@@ -1,12 +1,16 @@
+import pathlib
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pytest
+import zarr
 from bioio_base import dimensions, exceptions, test_utilities, types
 from ome_types import to_dict
 from zarr.core.group import GroupMetadata
 
 from bioio_ome_zarr import Reader
+from bioio_ome_zarr.writers import OMEZarrWriter
 
 from .conftest import LOCAL_RESOURCES_DIR
 
@@ -339,3 +343,70 @@ def test_read_ome_metadata_channels_no_color() -> None:
     uri = LOCAL_RESOURCES_DIR / "test_ngff_channel_no_color.zarr"
     reader = Reader(uri)
     assert reader.ome_metadata.images[0].pixels.channels[0].name == "random"
+
+
+def _write_store_with_bioio_block(
+    path: pathlib.Path, block: Optional[Dict[str, object]]
+) -> str:
+    """Write a minimal store and inject a root ``"bioio"`` provenance block."""
+    shape = (1, 1, 1, 4, 4)
+    data = np.zeros(shape, dtype=np.uint8)
+    writer = OMEZarrWriter(store=str(path), level_shapes=[shape], dtype=data.dtype)
+    writer.write_full_volume(data)
+    if block is not None:
+        grp = zarr.open_group(str(path), mode="r+")
+        grp.attrs["bioio"] = block
+    return str(path)
+
+
+def test_standard_metadata_from_provenance(tmp_path: pathlib.Path) -> None:
+    """standard_metadata is enriched from the root 'bioio' provenance block."""
+    uri = _write_store_with_bioio_block(
+        tmp_path / "prov.zarr",
+        {
+            "standard_metadata": {
+                "objective": "40x/1.2W",
+                "row": "B",
+                "column": "3",
+                "binning": "2x2",
+                "position_index": 7,
+                "imaging_datetime": "2024-05-01T09:30:00",
+                "imaged_by": "jdoe",
+                # Natively-derivable field: must NOT clobber the reader's value.
+                "image_size_x": 999,
+            }
+        },
+    )
+
+    sm = Reader(uri).standard_metadata
+    assert sm.objective == "40x/1.2W"
+    assert sm.row == "B"
+    assert sm.column == "3"
+    assert sm.binning == "2x2"
+    assert sm.position_index == 7
+    assert sm.imaging_datetime == datetime(2024, 5, 1, 9, 30, 0)
+    assert sm.imaged_by == "jdoe"
+    # image_size_x stays natively derived (4), not overridden by the block.
+    assert sm.image_size_x == 4
+
+
+def test_standard_metadata_without_provenance(tmp_path: pathlib.Path) -> None:
+    """Without a 'bioio' block, provenance-only fields stay unset."""
+    uri = _write_store_with_bioio_block(tmp_path / "no_prov.zarr", None)
+    sm = Reader(uri).standard_metadata
+    assert sm.objective is None
+    assert sm.row is None
+    assert sm.position_index is None
+    # Natively-derived fields are still populated.
+    assert sm.image_size_x == 4
+
+
+def test_standard_metadata_bad_datetime_warns(tmp_path: pathlib.Path) -> None:
+    """A malformed imaging_datetime warns and is left unset."""
+    uri = _write_store_with_bioio_block(
+        tmp_path / "bad_dt.zarr",
+        {"standard_metadata": {"imaging_datetime": "not-a-date"}},
+    )
+    with pytest.warns(UserWarning, match="imaging_datetime"):
+        sm = Reader(uri).standard_metadata
+    assert sm.imaging_datetime is None
