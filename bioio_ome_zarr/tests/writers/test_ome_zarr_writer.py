@@ -1,7 +1,7 @@
 import json
 import multiprocessing as mp
 import pathlib
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import dask.array as da
 import numpy as np
@@ -12,6 +12,7 @@ from ngff_zarr.validate import validate as ngff_validate
 
 from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import Channel, OMEZarrWriter
+from bioio_ome_zarr.writers.ome_zarr_writer import AttributesSpec
 
 from ..conftest import LOCAL_RESOURCES_DIR
 
@@ -60,7 +61,7 @@ def assert_valid_ome_zarr(
 def test_preview_metadata_merges_attributes(
     tmp_path: pathlib.Path,
     zarr_format: int,
-    attributes: Union[Dict[str, Any], List[Dict[str, Any]]],
+    attributes: AttributesSpec,
     expected: dict,
 ) -> None:
     writer = OMEZarrWriter(
