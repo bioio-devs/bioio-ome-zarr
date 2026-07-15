@@ -580,9 +580,8 @@ class Reader(reader.Reader):
         The ``standard_metadata`` sub-dict of the root ``"bioio"`` block.
 
         bioio-conversion records the source image's cross-format
-        ``StandardMetadata`` here (snake_case field names) for fields an
-        OME-Zarr store cannot reconstruct on its own. Returns an empty dict
-        when the block is absent or malformed.
+        ``StandardMetadata`` here for fields an OME-Zarr store cannot
+        reconstruct on its own.
         """
         bioio_attrs = self._zarr.attrs.get("bioio")
         if isinstance(bioio_attrs, dict):
@@ -593,42 +592,37 @@ class Reader(reader.Reader):
 
     @property
     def objective(self) -> Optional[str]:
-        """Objective recorded in the 'bioio' provenance block, if present."""
+        """Objective recorded in the 'bioio' provenance block."""
         return self._embedded_standard_metadata.get("objective")
 
     @property
     def row(self) -> Optional[str]:
-        """Well row recorded in the 'bioio' provenance block, if present."""
+        """Well row recorded in the 'bioio' provenance block."""
         return self._embedded_standard_metadata.get("row")
 
     @property
     def column(self) -> Optional[str]:
-        """Well column recorded in the 'bioio' provenance block, if present."""
+        """Well column recorded in the 'bioio' provenance block."""
         return self._embedded_standard_metadata.get("column")
 
     @property
     def binning(self) -> Optional[str]:
-        """Binning recorded in the 'bioio' provenance block, if present."""
+        """Binning recorded in the 'bioio' provenance block."""
         return self._embedded_standard_metadata.get("binning")
 
     @property
     def position_index(self) -> Optional[int]:
-        """Position index recorded in the 'bioio' provenance block, if present."""
+        """Position index recorded in the 'bioio' provenance block."""
         return self._embedded_standard_metadata.get("position_index")
 
     @property
     def imaged_by(self) -> Optional[str]:
-        """Experimenter recorded in the 'bioio' provenance block, if present."""
+        """Experimenter recorded in the 'bioio' provenance block."""
         return self._embedded_standard_metadata.get("imaged_by")
 
     @property
     def imaging_datetime(self) -> Optional[datetime]:
-        """
-        Acquisition datetime from the 'bioio' provenance block, if present.
-
-        Stored as an ISO 8601 string; parsed back to a ``datetime``. A
-        malformed value is logged and treated as absent.
-        """
+        """Acquisition datetime from the 'bioio' provenance block."""
         raw = self._embedded_standard_metadata.get("imaging_datetime")
         if raw is None or isinstance(raw, datetime):
             return raw
@@ -639,45 +633,42 @@ class Reader(reader.Reader):
             return None
 
     @property
-    def _time_interval_seconds(self) -> Optional[float]:
-        """
-        The T-axis interval in seconds, or None if there is no time axis.
-
-        ``time_interval`` is the raw T-axis scale; this converts it to seconds
-        using the axis unit the reader parses (see ``dimension_properties``).
-        Falls back to treating the scale as seconds when no unit is recorded or
-        the conversion fails.
-        """
+    def timelapse_interval(self) -> Optional[timedelta]:
+        """Average interval between timepoints."""
         interval = self.time_interval
         if interval is None:
             return None
         unit = self.dimension_properties.T.unit
-        if unit is None:
-            return float(interval)
-        try:
-            return float((interval * unit).to(types.ureg.second).magnitude)
-        except Exception as exc:
-            log.warning(
-                "Could not convert T interval %r %s to seconds: %s",
-                interval,
-                unit,
-                exc,
-            )
-            return float(interval)
+        seconds = float(interval)
+        if unit is not None:
+            try:
+                seconds = float((interval * unit).to(types.ureg.second).magnitude)
+            except Exception as exc:
+                log.warning(
+                    "Could not convert T interval %r %s to seconds: %s",
+                    interval,
+                    unit,
+                    exc,
+                )
+        return timedelta(seconds=seconds)
+
+    @property
+    def total_time_duration(self) -> Optional[timedelta]:
+        """Duration from the first to the last timepoint."""
+        interval = self.timelapse_interval
+        size_t = getattr(self.dims, dimensions.DimensionNames.Time, None)
+        if interval is None or size_t is None or size_t < 2:
+            return None
+        return interval * (size_t - 1)
 
     @property
     def standard_metadata(self) -> StandardMetadata:
         """
-        Return the standard metadata for this reader, updating specific fields.
+         Return the standard metadata for this reader, updating specific fields.
 
-        This implementation calls the base reader's standard_metadata property
-        via super() and then assigns:
-
-        * fields recorded in the root "bioio" provenance block (written by
-          bioio-conversion) that an OME-Zarr store cannot derive on its own, and
-        * the T-based durations (``timelapse_interval``, ``total_time_duration``)
-          derived from the T-axis scale and unit, which the base reader leaves
-          unset for OME-Zarr because it has no per-plane timing.
+         Extends the base reader's metadata with the "bioio" provenance fields
+        and the T-based durations, which an
+         OME-Zarr store does not otherwise populate.
         """
         metadata = super().standard_metadata
         metadata.objective = self.objective
@@ -687,14 +678,6 @@ class Reader(reader.Reader):
         metadata.position_index = self.position_index
         metadata.imaging_datetime = self.imaging_datetime
         metadata.imaged_by = self.imaged_by
-
-        interval_seconds = self._time_interval_seconds
-        if interval_seconds is not None:
-            metadata.timelapse_interval = timedelta(seconds=interval_seconds)
-            size_t = getattr(self.dims, dimensions.DimensionNames.Time, None)
-            if size_t is not None and size_t >= 2:
-                metadata.total_time_duration = timedelta(
-                    seconds=interval_seconds * (size_t - 1)
-                )
-
+        metadata.timelapse_interval = self.timelapse_interval
+        metadata.total_time_duration = self.total_time_duration
         return metadata
