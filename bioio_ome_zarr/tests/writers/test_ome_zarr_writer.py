@@ -11,8 +11,7 @@ import zarr
 from ngff_zarr.validate import validate as ngff_validate
 
 from bioio_ome_zarr import Reader
-from bioio_ome_zarr.writers import Channel, OMEZarrWriter
-from bioio_ome_zarr.writers.ome_zarr_writer import AttributesSpec
+from bioio_ome_zarr.writers import AttributesSpec, Channel, OMEZarrWriter
 
 from ..conftest import LOCAL_RESOURCES_DIR
 
