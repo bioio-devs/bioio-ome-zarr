@@ -574,58 +574,86 @@ class Reader(reader.Reader):
         self._ome_metadata = OME(images=images)
         return self._ome_metadata
 
-    # Fields the base reader cannot derive from an OME-Zarr store on its own,
-    # but that bioio-conversion records in the root "bioio" provenance block.
-    # Names are the snake_case StandardMetadata field names as written there.
-    _PROVENANCE_METADATA_FIELDS = (
-        "objective",
-        "row",
-        "column",
-        "binning",
-        "position_index",
-        "imaged_by",
-    )
+    @property
+    def _embedded_standard_metadata(self) -> Dict[str, Any]:
+        """
+        The ``standard_metadata`` sub-dict of the root ``"bioio"`` block.
+
+        bioio-conversion records the source image's cross-format
+        ``StandardMetadata`` here (snake_case field names) for fields an
+        OME-Zarr store cannot reconstruct on its own. Returns an empty dict
+        when the block is absent or malformed.
+        """
+        bioio_attrs = self._zarr.attrs.get("bioio")
+        if isinstance(bioio_attrs, dict):
+            embedded = bioio_attrs.get("standard_metadata")
+            if isinstance(embedded, dict):
+                return embedded
+        return {}
+
+    @property
+    def objective(self) -> Optional[str]:
+        """Objective recorded in the 'bioio' provenance block, if present."""
+        return self._embedded_standard_metadata.get("objective")
+
+    @property
+    def row(self) -> Optional[str]:
+        """Well row recorded in the 'bioio' provenance block, if present."""
+        return self._embedded_standard_metadata.get("row")
+
+    @property
+    def column(self) -> Optional[str]:
+        """Well column recorded in the 'bioio' provenance block, if present."""
+        return self._embedded_standard_metadata.get("column")
+
+    @property
+    def binning(self) -> Optional[str]:
+        """Binning recorded in the 'bioio' provenance block, if present."""
+        return self._embedded_standard_metadata.get("binning")
+
+    @property
+    def position_index(self) -> Optional[int]:
+        """Position index recorded in the 'bioio' provenance block, if present."""
+        return self._embedded_standard_metadata.get("position_index")
+
+    @property
+    def imaged_by(self) -> Optional[str]:
+        """Experimenter recorded in the 'bioio' provenance block, if present."""
+        return self._embedded_standard_metadata.get("imaged_by")
+
+    @property
+    def imaging_datetime(self) -> Optional[datetime]:
+        """
+        Acquisition datetime from the 'bioio' provenance block, if present.
+
+        Stored as an ISO 8601 string; parsed back to a ``datetime``. A
+        malformed value is logged and treated as absent.
+        """
+        raw = self._embedded_standard_metadata.get("imaging_datetime")
+        if raw is None or isinstance(raw, datetime):
+            return raw
+        try:
+            return datetime.fromisoformat(str(raw))
+        except ValueError as exc:
+            log.warning("Failed to parse imaging_datetime %r: %s", raw, exc)
+            return None
 
     @property
     def standard_metadata(self) -> StandardMetadata:
         """
-        Standard metadata for the current image.
+        Return the standard metadata for this reader, updating specific fields.
 
-        Extends the base reader's natively-derived metadata with fields that an
-        OME-Zarr store cannot reconstruct on its own but that bioio-conversion
-        records in the root ``"bioio"`` provenance block (under its
-        ``standard_metadata`` sub-dict): ``objective``, ``row``, ``column``,
-        ``binning``, ``position_index``, ``imaging_datetime`` and ``imaged_by``.
-        When present, these are propagated into the returned metadata.
+        This implementation calls the base reader's standard_metadata property
+        via super() and then assigns the values recorded in the root "bioio"
+        provenance block (written by bioio-conversion) for fields an OME-Zarr
+        store cannot derive on its own.
         """
         metadata = super().standard_metadata
-
-        bioio_attrs = self._zarr.attrs.get("bioio")
-        embedded = (
-            bioio_attrs.get("standard_metadata")
-            if isinstance(bioio_attrs, dict)
-            else None
-        )
-        if not isinstance(embedded, dict):
-            return metadata
-
-        for field in self._PROVENANCE_METADATA_FIELDS:
-            value = embedded.get(field)
-            if value is not None:
-                setattr(metadata, field, value)
-
-        # imaging_datetime is JSON-serialized as an ISO 8601 string; parse back.
-        raw_datetime = embedded.get("imaging_datetime")
-        if isinstance(raw_datetime, datetime):
-            metadata.imaging_datetime = raw_datetime
-        elif raw_datetime is not None:
-            try:
-                metadata.imaging_datetime = datetime.fromisoformat(str(raw_datetime))
-            except ValueError:
-                warnings.warn(
-                    f"Could not parse imaging_datetime {raw_datetime!r} from the "
-                    "'bioio' provenance block; leaving it unset.",
-                    UserWarning,
-                )
-
+        metadata.objective = self.objective
+        metadata.row = self.row
+        metadata.column = self.column
+        metadata.binning = self.binning
+        metadata.position_index = self.position_index
+        metadata.imaging_datetime = self.imaging_datetime
+        metadata.imaged_by = self.imaged_by
         return metadata

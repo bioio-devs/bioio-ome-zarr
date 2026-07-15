@@ -1,3 +1,4 @@
+import logging
 import pathlib
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -401,12 +402,15 @@ def test_standard_metadata_without_provenance(tmp_path: pathlib.Path) -> None:
     assert sm.image_size_x == 4
 
 
-def test_standard_metadata_bad_datetime_warns(tmp_path: pathlib.Path) -> None:
-    """A malformed imaging_datetime warns and is left unset."""
+def test_standard_metadata_bad_datetime_warns(
+    tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A malformed imaging_datetime is logged and left unset."""
     uri = _write_store_with_bioio_block(
         tmp_path / "bad_dt.zarr",
         {"standard_metadata": {"imaging_datetime": "not-a-date"}},
     )
-    with pytest.warns(UserWarning, match="imaging_datetime"):
+    with caplog.at_level(logging.WARNING):
         sm = Reader(uri).standard_metadata
     assert sm.imaging_datetime is None
+    assert "imaging_datetime" in caplog.text
