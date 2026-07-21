@@ -80,7 +80,7 @@ class TestS3WriterIntegration:
             store=output_store,
             level_shapes=level_shapes,
             dtype=data.dtype,
-            zarr_format=zarr_format,  # 2 for Zarr v2
+            zarr_format=zarr_format,
             channels=channels,
             axes_names=["t", "c", "z", "y", "x"],
             axes_types=["time", "channel", "space", "space", "space"],
