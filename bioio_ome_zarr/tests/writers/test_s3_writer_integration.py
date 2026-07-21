@@ -9,8 +9,7 @@ import pytest
 from bioio_ome_zarr.tests.writers.test_ome_zarr_writer import assert_valid_ome_zarr
 from bioio_ome_zarr.writers import Channel, OMEZarrWriter
 
-# aics-pipeline-output is located in the aics-dev account
-S3_TEST_BUCKET = os.getenv("S3_TEST_BUCKET", "aics-pipeline-output")
+S3_TEST_BUCKET = os.getenv("S3_TEST_BUCKET", "test-bucket")
 
 
 @pytest.mark.skipif(
