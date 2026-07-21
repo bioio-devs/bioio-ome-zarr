@@ -9,8 +9,8 @@ import pytest
 from bioio_ome_zarr.tests.writers.test_ome_zarr_writer import assert_valid_ome_zarr
 from bioio_ome_zarr.writers import Channel, OMEZarrWriter
 
-# located in the aics-dev account (771753870375)
-S3_TEST_BUCKET_NAME = "aics-pipeline-output"
+# aics-pipeline-output is located in the aics-dev account
+S3_TEST_BUCKET = os.getenv("S3_TEST_BUCKET", "aics-pipeline-output")
 
 
 @pytest.mark.skipif(
@@ -28,7 +28,7 @@ class TestS3WriterIntegration:
     @classmethod
     def s3_prefix(cls) -> Generator[str, None, None]:
         # Setup: Runs once before any tests in the class start
-        s3_prefix = f"s3://{S3_TEST_BUCKET_NAME}/{uuid4()}"
+        s3_prefix = f"s3://{S3_TEST_BUCKET}/{uuid4()}"
 
         yield s3_prefix  # Provide the resource to tests
 
