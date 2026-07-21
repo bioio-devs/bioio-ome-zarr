@@ -1,27 +1,37 @@
-import fsspec
 import os
-import pytest
-
+from typing import Generator
 from uuid import uuid4
+
+import fsspec
+import pytest
 
 # located in the aics-dev account (771753870375)
 S3_TEST_BUCKET_NAME = "aics-pipeline-output"
 
-@pytest.mark.skipif(not os.getenv("ENABLE_INTEGRATION_TESTS").lower() == "true", reason="Integration tests are disabled")
+
+@pytest.mark.skipif(
+    os.getenv("ENABLE_INTEGRATION_TESTS", "false").lower() != "true",
+    reason="Integration tests are disabled",
+)
 class TestS3WriterIntegration:
+    """
+    Validates that the OME-Zarr writer can write to S3. This test requires
+    AWS credentials to be set in the environment and the ENABLE_INTEGRATION_TESTS
+    environment variable to be set to "true".
+    """
 
     @pytest.fixture(scope="class")
     @classmethod
-    def s3_prefix(cls):
+    def s3_prefix(cls) -> Generator[str]:
         # Setup: Runs once before any tests in the class start
         s3_prefix = f"s3://{S3_TEST_BUCKET_NAME}/{uuid4()}"
-        
+
         yield s3_prefix  # Provide the resource to tests
-        
+
         # Teardown: Runs once after all tests in the class finish
         fsspec.filesystem("s3").rm(s3_prefix, recursive=True)
 
-    def test_fsspec_writes_to_s3(self, s3_prefix):
+    def test_fsspec_writes_to_s3(self, s3_prefix: str) -> None:
         """
         Sanity check that fsspec can write to S3.
         """
@@ -40,5 +50,3 @@ class TestS3WriterIntegration:
 
         # Assert
         assert read_data == data_to_write
-    
-    
