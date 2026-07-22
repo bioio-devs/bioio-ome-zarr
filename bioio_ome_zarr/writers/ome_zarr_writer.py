@@ -716,11 +716,6 @@ class OMEZarrWriter:
 
     def _open_root(self) -> zarr.Group:
         """Accept a path/URL or Store-like and return an opened root group."""
-        if isinstance(self.store, str):
-            if "://" in self.store:
-                fs = zarr.storage.FsspecStore(self.store, mode="w")
-                return zarr.open_group(store=fs, mode="w", zarr_format=self.zarr_format)
-            return zarr.open_group(self.store, mode="w", zarr_format=self.zarr_format)
         return zarr.group(
             store=self.store,
             overwrite=True,
