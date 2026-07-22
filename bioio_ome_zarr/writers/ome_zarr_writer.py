@@ -15,6 +15,7 @@ from .utils import (
     resize,
 )
 
+AttributesSpec = Union[Dict[str, Any], List[Dict[str, Any]]]
 MultiResolutionShapeSpec = Union[DimSeq, PerLevelDimSeq]
 
 
@@ -171,6 +172,7 @@ class OMEZarrWriter:
         axes_types: Optional[List[str]] = None,
         axes_units: Optional[List[Optional[str]]] = None,
         physical_pixel_size: Optional[List[float]] = None,
+        attributes: Optional[AttributesSpec] = None,
     ) -> None:
         """
         Initialize the writer and capture core configuration. Arrays and
@@ -217,6 +219,8 @@ class OMEZarrWriter:
             Physical units for each axis.
         physical_pixel_size : Optional[List[float]]
             Physical scale at level 0 for each axis.
+        attributes : Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]
+            Extra key/values merged into the root group's attributes.
         """
         if len(level_shapes) == 0:
             raise ValueError("level_shapes cannot be empty")
@@ -315,6 +319,7 @@ class OMEZarrWriter:
         self.rdefs = rdefs
         self.creator_info = creator_info
         self.root_transform = root_transform
+        self.attributes = attributes
 
         # Handles & state
         self.root: Optional[zarr.Group]
@@ -341,10 +346,23 @@ class OMEZarrWriter:
             root_transform=self.root_transform,
             dataset_scales=self.dataset_scales,
         )
-        return build_ngff_metadata(
+        md = build_ngff_metadata(
             zarr_format=self.zarr_format,
             params=params,
         )
+
+        # Caller-supplied attributes keys
+        if self.attributes:
+            mappings = (
+                [self.attributes]
+                if isinstance(self.attributes, dict)
+                else self.attributes
+            )
+            for mapping in mappings:
+                if mapping:
+                    md.update(mapping)
+
+        return md
 
     def initialize(self) -> None:
         """
@@ -723,13 +741,7 @@ class OMEZarrWriter:
         )
 
     def _write_metadata(self) -> None:
-        """Persist NGFF metadata to the opened root group."""
+        """Persist NGFF metadata to the root group."""
         if self.root is None:
             raise RuntimeError("Store must be initialized before writing metadata.")
-
-        md = self.preview_metadata()
-        if self.zarr_format == 2:
-            self.root.attrs["multiscales"] = md["multiscales"]
-            self.root.attrs["omero"] = md["omero"]
-        else:
-            self.root.attrs.update({"ome": md["ome"]})
+        self.root.attrs.update(self.preview_metadata())

@@ -11,7 +11,7 @@ import zarr
 from ngff_zarr.validate import validate as ngff_validate
 
 from bioio_ome_zarr import Reader
-from bioio_ome_zarr.writers import Channel, OMEZarrWriter
+from bioio_ome_zarr.writers import AttributesSpec, Channel, OMEZarrWriter
 
 from ..conftest import LOCAL_RESOURCES_DIR
 
@@ -43,6 +43,36 @@ def assert_valid_ome_zarr(
     else:
         ngff_validate(attrs, version="0.5", model="image", strict=False)
         assert "ome" in attrs and "multiscales" in attrs["ome"]
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3], ids=["v2", "v3"])
+@pytest.mark.parametrize(
+    "attributes, expected",
+    [
+        ({"bioio": {"version": "1.2.3"}}, {"bioio": {"version": "1.2.3"}}),
+        (
+            [{"a": 1, "shared": "first"}, {"b": 2, "shared": "second"}],
+            {"a": 1, "b": 2, "shared": "second"},
+        ),
+    ],
+    ids=["dict", "list"],
+)
+def test_preview_metadata_merges_attributes(
+    tmp_path: pathlib.Path,
+    zarr_format: int,
+    attributes: AttributesSpec,
+    expected: dict,
+) -> None:
+    writer = OMEZarrWriter(
+        store=str(tmp_path / "attrs.zarr"),
+        level_shapes=[(1, 1, 1, 4, 4)],
+        dtype=np.uint8,
+        zarr_format=cast(Literal[2, 3], zarr_format),
+        attributes=attributes,
+    )
+    md = writer.preview_metadata()
+    assert {key: md[key] for key in expected} == expected
+    assert ("multiscales" if zarr_format == 2 else "ome") in md
 
 
 @pytest.mark.parametrize(
