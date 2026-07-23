@@ -95,6 +95,17 @@ Available recipes:
     update-from-cookiecutter # update this repo using latest cookiecutter-bioio-reader
 ```
 
+## Enabling S3 Integration Tests
+
+[S3 integration tests](bioio_ome_zarr/tests/writers/test_s3_writer_integration.py) are
+disabled by default. To run these locally:
+1. set `ENABLE_INTEGRATION_TESTS` environment variable to `true`
+2. configure [AWS credentials](https://docs.aws.amazon.com/boto3/latest/guide/credentials.html)
+3. create or choose existing bucket to use for test outputs
+4. set `S3_TEST_BUCKET` environment variable to the name of your bucket (defaults to `test-bucket` if unset)
+
+Test outputs will be automatically cleaned up from the bucket at the end of each test run.
+
 ## Deploying
 
 A reminder for the maintainers on how to deploy.
