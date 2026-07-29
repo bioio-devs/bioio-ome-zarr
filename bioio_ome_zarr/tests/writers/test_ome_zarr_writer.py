@@ -4,6 +4,7 @@ import pathlib
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import dask.array as da
+import fsspec
 import numpy as np
 import ome_zarr_models
 import pytest
@@ -695,3 +696,45 @@ def test_two_processes_attach_and_write_match_source(tmp_path: pathlib.Path) -> 
         )
 
     assert_valid_ome_zarr(out_store)
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_write_to_remote_store(zarr_format: int) -> None:
+    """
+    Test that the OME-Zarr writer can write to remote stores, using in-memory memory://
+    file system as a stand-in.
+    """
+    # Arrange
+    level_shapes = [
+        (2, 3, 4, 256, 256),  # L0 full res
+        (2, 3, 4, 128, 128),  # L1 downsampled Y/X by 2
+    ]
+
+    data = np.random.randint(0, 255, size=level_shapes[0], dtype=np.uint8)
+    channels = [Channel(label=f"c{i}", color="FF0000") for i in range(data.shape[1])]
+
+    output_store = f"memory://unit_tests/output_{zarr_format}.zarr"
+
+    kwargs = dict(
+        store=output_store,
+        level_shapes=level_shapes,
+        dtype=data.dtype,
+        zarr_format=zarr_format,
+        channels=channels,
+        axes_names=["t", "c", "z", "y", "x"],
+        axes_types=["time", "channel", "space", "space", "space"],
+        axes_units=[None, None, "micrometer", "micrometer", "micrometer"],
+    )
+    writer = OMEZarrWriter(**kwargs)
+
+    # Act
+    writer.write_full_volume(data)
+
+    # Assert
+    # Check that the output store exists and is a directory
+    fs = fsspec.filesystem("memory")
+    assert fs.exists(output_store)
+    assert fs.isdir(output_store)
+
+    # Validate the OME-Zarr
+    assert_valid_ome_zarr(output_store, zarr_format=zarr_format)
