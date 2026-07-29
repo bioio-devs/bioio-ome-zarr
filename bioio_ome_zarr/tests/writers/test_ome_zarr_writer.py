@@ -731,10 +731,8 @@ def test_write_to_remote_store(zarr_format: int) -> None:
     writer.write_full_volume(data)
 
     # Assert
-    # Check that the output store exists and is a directory
     fs = fsspec.filesystem("memory")
     assert fs.exists(output_store)
     assert fs.isdir(output_store)
 
-    # Validate the OME-Zarr
     assert_valid_ome_zarr(output_store, zarr_format=zarr_format)
