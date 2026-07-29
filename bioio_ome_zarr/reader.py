@@ -23,8 +23,9 @@ from . import utils as metadata_utils
 
 log = logging.getLogger(__name__)
 
-# Root attributes key under which bioio-conversion records source provenance.
+# Provenance names mirrored from ``bioio_conversion.provenance``.
 PROVENANCE_ATTR_KEY = "bioio_conversion"
+STANDARD_METADATA_KEY = "standard_metadata"
 
 ###############################################################################
 
@@ -586,7 +587,7 @@ class Reader(reader.Reader):
         if not isinstance(block, dict):
             return {}
 
-        rel_path = block.get("standard_metadata")
+        rel_path = block.get(STANDARD_METADATA_KEY)
         if not isinstance(rel_path, str):
             return {}
 
