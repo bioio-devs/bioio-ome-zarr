@@ -1,6 +1,7 @@
 import json
 import multiprocessing as mp
 import pathlib
+import zipfile
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import dask.array as da
@@ -73,6 +74,85 @@ def test_preview_metadata_merges_attributes(
     md = writer.preview_metadata()
     assert {key: md[key] for key in expected} == expected
     assert ("multiscales" if zarr_format == 2 else "ome") in md
+
+
+def test_writes_ozx_archive_with_compliant_metadata(tmp_path: pathlib.Path) -> None:
+    archive_path = tmp_path / "sample.ozx"
+    data = np.arange(16, dtype=np.uint8).reshape(4, 4)
+
+    with OMEZarrWriter(
+        store=str(archive_path),
+        level_shapes=[(4, 4)],
+        dtype=data.dtype,
+        zarr_format=3,
+        image_name="ozx-test",
+    ) as writer:
+        writer.write_full_volume(data)
+
+    with zipfile.ZipFile(archive_path) as zf:
+        names = zf.namelist()
+        assert names[0] == "zarr.json"
+        assert "0/zarr.json" in names
+        assert any(name.endswith("0/0") or name.endswith("0.0") for name in names)
+
+        # The archive must actually be readable: entries aren't just listed in
+        # the central directory, their bytes must round-trip too.
+        assert zf.testzip() is None
+        root_attrs = json.loads(zf.read("zarr.json"))["attributes"]
+        assert root_attrs["ome"]["version"] == "0.5"
+
+        comment = json.loads(zf.comment.decode("utf-8"))
+        assert comment["ome"]["version"] == "0.5"
+        assert comment["ome"]["zipFile"]["centralDirectory"]["jsonFirst"] is True
+
+    store = zarr.storage.ZipStore(str(archive_path), mode="r")
+    group = zarr.open_group(store=store, mode="r")
+    np.testing.assert_array_equal(group["0"][:], data)
+
+
+def test_ozx_requires_zarr_v3(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(ValueError, match="zarr_format=3"):
+        OMEZarrWriter(
+            store=str(tmp_path / "sample.ozx"),
+            level_shapes=[(4, 4)],
+            dtype=np.uint8,
+            zarr_format=2,
+        )
+
+
+def test_ozx_multiple_write_region_calls_preserve_prior_writes(
+    tmp_path: pathlib.Path,
+) -> None:
+    """
+    Regression test: closing (or reopening) a ZipStore mid-stream truncates the
+    archive, so the writer must not finalize the store after every write call
+    -- only once, explicitly, via `close()`.
+    """
+    archive_path = tmp_path / "regions.ozx"
+
+    with OMEZarrWriter(
+        store=str(archive_path),
+        level_shapes=[(4, 8)],
+        dtype=np.uint8,
+        zarr_format=3,
+        chunk_shape=(4, 4),
+    ) as writer:
+        writer.write_region(
+            np.full((4, 4), 1, dtype=np.uint8), (slice(0, 4), slice(0, 4))
+        )
+        writer.write_region(
+            np.full((4, 4), 2, dtype=np.uint8), (slice(0, 4), slice(4, 8))
+        )
+
+    with zipfile.ZipFile(archive_path) as zf:
+        assert zf.testzip() is None
+        assert "zarr.json" in zf.namelist()
+
+    store = zarr.storage.ZipStore(str(archive_path), mode="r")
+    group = zarr.open_group(store=store, mode="r")
+    result = group["0"][:]
+    assert (result[:, :4] == 1).all()
+    assert (result[:, 4:] == 2).all()
 
 
 @pytest.mark.parametrize(

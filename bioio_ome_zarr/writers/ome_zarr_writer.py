@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
@@ -6,8 +8,15 @@ import numpy as np
 import zarr
 from numcodecs import Blosc as BloscV2
 from zarr.codecs import BloscCodec, BloscShuffle
+from zarr.storage import ZipStore
 
-from .metadata import Axes, Channel, MetadataParams, build_ngff_metadata
+from .metadata import (
+    OME_NGFF_VERSION_V05,
+    Axes,
+    Channel,
+    MetadataParams,
+    build_ngff_metadata,
+)
 from .utils import (
     DimSeq,
     PerLevelDimSeq,
@@ -313,6 +322,14 @@ class OMEZarrWriter:
             zarr_format=self.zarr_format,
         )
 
+        # OZX (RFC-9) requires the root-level `zarr.json`, which only Zarr v3
+        # (NGFF 0.5) produces; Zarr v2 groups use `.zgroup`/`.zattrs` instead.
+        if self._should_use_ozx_store(store) and self.zarr_format != 3:
+            raise ValueError(
+                "ZIP-backed OME-Zarr (.ozx) requires zarr_format=3 (NGFF 0.5); "
+                f"got zarr_format={self.zarr_format}."
+            )
+
         # Metadata fields
         self.image_name = image_name or "Image"
         self.channels = channels
@@ -407,7 +424,13 @@ class OMEZarrWriter:
         """
         self = cls.__new__(cls)
         self.store = store
-        self.root = zarr.open_group(store, mode="r+")
+        if cls._should_use_ozx_store(store):
+            self.root = zarr.open_group(
+                store=cls._make_zip_store(store, mode="a"),
+                mode="a",
+            )
+        else:
+            self.root = zarr.open_group(store, mode="r+")
         self.datasets = []
         level = 0
         while str(level) in self.root:
@@ -653,6 +676,25 @@ class OMEZarrWriter:
 
             array[region_level] = np_cur
 
+    def close(self) -> None:
+        """
+        Finalize the store, required for ZIP-backed (``.ozx``/``.zip``) targets.
+
+        A ``ZipStore`` holds a single open file handle for the whole archive;
+        closing it writes the central directory and the OME-Zarr archive
+        comment. Call this once, after all ``write_*`` calls are done — closing
+        (or reopening) a ``ZipStore`` mid-stream truncates the archive, so this
+        is never done automatically after an individual write. No-op for
+        non-ZIP stores.
+        """
+        self._finalize_store()
+
+    def __enter__(self) -> "OMEZarrWriter":
+        return self
+
+    def __exit__(self, *_exc_info: Any) -> None:
+        self.close()
+
     # -----------------
     # Internal plumbing
     # -----------------
@@ -732,16 +774,84 @@ class OMEZarrWriter:
 
         self._initialized = True
 
+    @staticmethod
+    def _should_use_ozx_store(store: Union[str, zarr.storage.StoreLike]) -> bool:
+        if isinstance(store, ZipStore):
+            return True
+        if isinstance(store, str):
+            return store.lower().endswith((".ozx", ".zip"))
+        return False
+
+    @staticmethod
+    def _make_zip_store(
+        store: Union[str, zarr.storage.StoreLike],
+        *,
+        mode: Literal["r", "a"] = "a",
+    ) -> ZipStore:
+        if isinstance(store, ZipStore):
+            return store
+        if isinstance(store, str):
+            return ZipStore(
+                store,
+                mode=mode,
+                compression=0,  # zipfile.ZIP_STORED: disable zip-level compression
+                allowZip64=True,
+            )
+        raise TypeError("ZIP-backed stores require a path or ZipStore instance")
+
     def _open_root(self) -> zarr.Group:
         """Accept a path/URL or Store-like and return an opened root group."""
+        attributes = self.preview_metadata()
+        if self._should_use_ozx_store(self.store):
+            if isinstance(self.store, str):
+                # Zarr's own `overwrite=True` can't clear a *pre-existing*
+                # archive through the store API (ZipStore doesn't support
+                # deletes), so give it a clean slate up front. The store
+                # itself is then always opened in append mode: dask's graph
+                # tokenizer pickles the target array as a side effect of
+                # building a da.store()/da.to_zarr() graph, and unpickling a
+                # ZipStore reopens the underlying zip file -- in "w" mode
+                # that would truncate it. Opening in "a" mode from the start
+                # means every reopen (that one, or an explicit close()+open()
+                # reattach) preserves what's already been written.
+                Path(self.store).unlink(missing_ok=True)
+            zip_store = self._make_zip_store(self.store, mode="a")
+            return zarr.group(
+                store=zip_store,
+                overwrite=True,
+                zarr_format=self.zarr_format,
+                attributes=attributes,
+            )
+
         return zarr.group(
             store=self.store,
             overwrite=True,
             zarr_format=self.zarr_format,
+            attributes=attributes,
         )
 
     def _write_metadata(self) -> None:
-        """Persist NGFF metadata to the root group."""
+        """Persist metadata attributes and any archive-specific metadata."""
         if self.root is None:
             raise RuntimeError("Store must be initialized before writing metadata.")
+        if self._should_use_ozx_store(self.store):
+            self._write_ozx_archive_comment()
+            return
         self.root.attrs.update(self.preview_metadata())
+
+    def _write_ozx_archive_comment(self) -> None:
+        store_backend = getattr(self.root, "store", None)
+        if not isinstance(store_backend, ZipStore):
+            return
+        comment = {
+            "ome": {
+                "version": OME_NGFF_VERSION_V05,
+                "zipFile": {"centralDirectory": {"jsonFirst": True}},
+            }
+        }
+        store_backend._zf.comment = json.dumps(comment).encode("utf-8")
+
+    def _finalize_store(self) -> None:
+        store_backend = getattr(self.root, "store", None)
+        if isinstance(store_backend, ZipStore):
+            store_backend.close()
