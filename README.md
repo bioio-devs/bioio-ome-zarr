@@ -327,6 +327,27 @@ writer.write_full_volume(
 )
 ```
 
+### Writing a zipped OME-Zarr archive (OZX / RFC-9)
+
+`.ozx` (or `.zip`) archives bundle an entire OME-Zarr store into a single ZIP file,
+as specified by [OME-NGFF RFC-9](https://ngff.openmicroscopy.org/rfc/9/index.html).
+They require Zarr v3 (`zarr_format=3`) and must be written by a single process.
+
+```python
+import numpy as np
+from bioio_ome_zarr.writers import OMEZarrWriter
+
+data = np.random.randint(0, 255, size=(4, 256, 256), dtype=np.uint8)
+
+with OMEZarrWriter(
+    store="output.ozx",
+    level_shapes=[(4, 256, 256), (4, 128, 128)],
+    dtype=data.dtype,
+    zarr_format=3,
+    axes_names=["z", "y", "x"],
+) as writer:
+    writer.write_full_volume(data)
+```
 ---
 
 ### Writer Utility Functions
