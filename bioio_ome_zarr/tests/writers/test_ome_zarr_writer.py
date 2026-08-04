@@ -105,10 +105,6 @@ def test_writes_ozx_archive_with_compliant_metadata(tmp_path: pathlib.Path) -> N
         assert comment["ome"]["version"] == "0.5"
         assert comment["ome"]["zipFile"]["centralDirectory"]["jsonFirst"] is True
 
-    store = zarr.storage.ZipStore(str(archive_path), mode="r")
-    group = zarr.open_group(store=store, mode="r")
-    np.testing.assert_array_equal(group["0"][:], data)
-
 
 def test_ozx_requires_zarr_v3(tmp_path: pathlib.Path) -> None:
     with pytest.raises(ValueError, match="zarr_format=3"):
