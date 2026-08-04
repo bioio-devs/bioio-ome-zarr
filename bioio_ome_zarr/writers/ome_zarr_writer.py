@@ -237,7 +237,11 @@ class OMEZarrWriter:
 
         self.store = store
         self._use_zip: bool = (
-            self._should_use_ozx_store(store)
+            (
+                isinstance(store, ZipStore)
+                or isinstance(store, str)
+                and store.lower().endswith((".ozx", ".zip"))
+            )
             if use_zip_store is None
             else use_zip_store
         )
@@ -349,7 +353,6 @@ class OMEZarrWriter:
         self.datasets: List[zarr.Array]
         self._initialized: bool = False
         self._metadata_written: bool = False
-        self._store_finalized: bool = False
 
     # -----------------
     # Public interface
@@ -497,7 +500,6 @@ class OMEZarrWriter:
 
         # compute and let dask optimize
         da.compute(*ops)
-        self._finalize_store()
 
     def write_timepoints(
         self,
@@ -632,7 +634,6 @@ class OMEZarrWriter:
                 )
         # compute and let dask optimize
         da.compute(*ops)
-        self._finalize_store()
 
     def write_region(
         self,
@@ -852,23 +853,3 @@ class OMEZarrWriter:
             self._write_ozx_archive_comment()
             return
         self.root.attrs.update(self.preview_metadata())
-
-    def _write_ozx_archive_comment(self) -> None:
-        store_backend = getattr(self.root, "store", None)
-        if not isinstance(store_backend, ZipStore):
-            return
-        comment = {
-            "ome": {
-                "version": OME_NGFF_VERSION_V05,
-                "zipFile": {"centralDirectory": {"jsonFirst": True}},
-            }
-        }
-        store_backend._zf.comment = json.dumps(comment).encode("utf-8")
-
-    def _finalize_store(self) -> None:
-        if self._store_finalized:
-            return
-        store_backend = getattr(self.root, "store", None)
-        if isinstance(store_backend, ZipStore):
-            store_backend.close()
-            self._store_finalized = True

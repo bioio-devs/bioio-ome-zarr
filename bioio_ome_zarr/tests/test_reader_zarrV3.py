@@ -371,14 +371,14 @@ def test_read_ozx_archive(tmp_path: pathlib.Path) -> None:
     archive_path = tmp_path / "sample.ozx"
     original = np.arange(32 * 32, dtype=np.uint8).reshape(32, 32)
 
-    writer = OMEZarrWriter(
+    with OMEZarrWriter(
         store=str(archive_path),
         level_shapes=[(32, 32)],
         dtype=original.dtype,
         zarr_format=3,
         image_name="ozx-roundtrip",
-    )
-    writer.write_full_volume(original)
+    ) as writer:
+        writer.write_full_volume(original)
 
     reader = Reader(str(archive_path))
     assert reader.scenes == ("ozx-roundtrip",)

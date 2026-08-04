@@ -147,12 +147,13 @@ def test_ozx_multiple_write_region_calls_preserve_prior_writes(
 
 def test_ozx_open_raises(tmp_path: pathlib.Path) -> None:
     archive_path = tmp_path / "sample.ozx"
-    OMEZarrWriter(
+    with OMEZarrWriter(
         store=str(archive_path),
         level_shapes=[(4, 4)],
         dtype=np.uint8,
         zarr_format=3,
-    ).write_full_volume(np.zeros((4, 4), dtype=np.uint8))
+    ) as writer:
+        writer.write_full_volume(np.zeros((4, 4), dtype=np.uint8))
 
     with pytest.raises(ValueError, match="multi-process"):
         OMEZarrWriter.open(str(archive_path))
