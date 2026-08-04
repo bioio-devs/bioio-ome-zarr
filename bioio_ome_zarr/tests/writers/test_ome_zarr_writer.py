@@ -116,29 +116,17 @@ def test_ozx_requires_zarr_v3(tmp_path: pathlib.Path) -> None:
         )
 
 
-def test_ozx_multiple_write_region_calls_preserve_prior_writes(
-    tmp_path: pathlib.Path,
-) -> None:
-    """
-    Regression test: closing (or reopening) a ZipStore mid-stream truncates the
-    archive, so the writer must not finalize the store after every write call
-    -- only once, explicitly, via `close()`.
-    """
-    archive_path = tmp_path / "regions.ozx"
-
+def test_ozx_write_region_raises(tmp_path: pathlib.Path) -> None:
     with OMEZarrWriter(
-        store=str(archive_path),
+        store=str(tmp_path / "regions.ozx"),
         level_shapes=[(4, 8)],
         dtype=np.uint8,
         zarr_format=3,
-        chunk_shape=(4, 4),
     ) as writer:
-        writer.write_region(
-            np.full((4, 4), 1, dtype=np.uint8), (slice(0, 4), slice(0, 4))
-        )
-        writer.write_region(
-            np.full((4, 4), 2, dtype=np.uint8), (slice(0, 4), slice(4, 8))
-        )
+        with pytest.raises(ValueError, match="write_region"):
+            writer.write_region(
+                np.full((4, 8), 1, dtype=np.uint8), (slice(0, 4), slice(0, 8))
+            )
 
 
 def test_ozx_open_raises(tmp_path: pathlib.Path) -> None:
