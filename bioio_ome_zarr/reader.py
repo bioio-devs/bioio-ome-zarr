@@ -655,6 +655,16 @@ class Reader(reader.Reader):
         return self._embedded_standard_metadata.get("imaged_by")
 
     @property
+    def stage_position_x(self) -> Optional[float]:
+        """Stage X position (µm) recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("stage_position_x")
+
+    @property
+    def stage_position_y(self) -> Optional[float]:
+        """Stage Y position (µm) recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("stage_position_y")
+
+    @property
     def imaging_datetime(self) -> Optional[datetime]:
         """Acquisition datetime from the source provenance sidecar."""
         raw = self._embedded_standard_metadata.get("imaging_datetime")
@@ -746,6 +756,8 @@ class Reader(reader.Reader):
         metadata.position_index = self.position_index
         metadata.imaging_datetime = self.imaging_datetime
         metadata.imaged_by = self.imaged_by
+        metadata.stage_position_x = self.stage_position_x
+        metadata.stage_position_y = self.stage_position_y
         metadata.timelapse_interval = self.timelapse_interval
         metadata.total_time_duration = self.total_time_duration
         return metadata

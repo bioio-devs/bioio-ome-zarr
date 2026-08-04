@@ -360,6 +360,8 @@ def test_read_ome_metadata_channels_no_color() -> None:
                 "row": None,
                 "column": None,
                 "position_index": None,
+                "stage_position_x": 12345.67,
+                "stage_position_y": 2345.89,
                 # Single timepoint: the source measured no timing.
                 "timelapse_interval": None,
                 "total_time_duration": None,
@@ -376,6 +378,8 @@ def test_read_ome_metadata_channels_no_color() -> None:
                 "row": None,
                 "column": None,
                 "position_index": None,
+                "stage_position_x": None,
+                "stage_position_y": None,
                 "timelapse_interval": None,
                 # Recorded by the source reader, in seconds.
                 "total_time_duration": timedelta(seconds=5.245),
@@ -402,6 +406,8 @@ def test_read_ome_metadata_channels_no_color() -> None:
                 "row": "4",
                 "column": "3",
                 "position_index": None,
+                "stage_position_x": None,
+                "stage_position_y": None,
                 # Real acquisition timing, not the store's nominal T scale of 1.0.
                 "timelapse_interval": timedelta(seconds=18.49526),
                 "total_time_duration": timedelta(seconds=73.981041),
@@ -451,5 +457,7 @@ def test_standard_metadata_without_provenance() -> None:
     assert standard_metadata.binning is None
     assert standard_metadata.imaged_by is None
     assert standard_metadata.imaging_datetime is None
+    assert standard_metadata.stage_position_x is None
+    assert standard_metadata.stage_position_y is None
     # Natively-derived fields are still populated.
     assert standard_metadata.image_size_x is not None
