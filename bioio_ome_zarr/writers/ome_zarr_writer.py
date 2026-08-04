@@ -182,7 +182,6 @@ class OMEZarrWriter:
         axes_units: Optional[List[Optional[str]]] = None,
         physical_pixel_size: Optional[List[float]] = None,
         attributes: Optional[AttributesSpec] = None,
-        use_zip_store: Optional[bool] = None,
     ) -> None:
         """
         Initialize the writer and capture core configuration. Arrays and
@@ -236,14 +235,8 @@ class OMEZarrWriter:
             raise ValueError("level_shapes cannot be empty")
 
         self.store = store
-        self._use_zip: bool = (
-            (
-                isinstance(store, ZipStore)
-                or isinstance(store, str)
-                and store.lower().endswith((".ozx", ".zip"))
-            )
-            if use_zip_store is None
-            else use_zip_store
+        self._use_zip: bool = isinstance(store, ZipStore) or (
+            isinstance(store, str) and store.lower().endswith((".ozx", ".zip"))
         )
         self.dtype = np.dtype(dtype)
 
