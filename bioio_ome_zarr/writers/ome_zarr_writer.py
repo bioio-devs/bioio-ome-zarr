@@ -349,6 +349,7 @@ class OMEZarrWriter:
         self.datasets: List[zarr.Array]
         self._initialized: bool = False
         self._metadata_written: bool = False
+        self._store_finalized: bool = False
 
     # -----------------
     # Public interface
@@ -435,8 +436,7 @@ class OMEZarrWriter:
                 store=cls._make_zip_store(store, mode="a"),
                 mode="a",
             )
-        else:
-            self.root = zarr.open_group(store, mode="r+")
+        self.root = zarr.open_group(store, mode="r+")
         self.datasets = []
         level = 0
         while str(level) in self.root:
@@ -658,6 +658,12 @@ class OMEZarrWriter:
             regions are derived by scaling these bounds.
 
         """
+        if self._use_zip:
+            raise ValueError(
+                "OZX archives do not support write_region(). "
+                "Use write_full_volume() or write_timepoints() instead."
+            )
+
         self._initialize()
 
         level0_shape = self.datasets[0].shape
@@ -860,6 +866,9 @@ class OMEZarrWriter:
         store_backend._zf.comment = json.dumps(comment).encode("utf-8")
 
     def _finalize_store(self) -> None:
+        if self._store_finalized:
+            return
         store_backend = getattr(self.root, "store", None)
         if isinstance(store_backend, ZipStore):
             store_backend.close()
+            self._store_finalized = True

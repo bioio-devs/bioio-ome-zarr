@@ -144,15 +144,18 @@ def test_ozx_multiple_write_region_calls_preserve_prior_writes(
             np.full((4, 4), 2, dtype=np.uint8), (slice(0, 4), slice(4, 8))
         )
 
-    with zipfile.ZipFile(archive_path) as zf:
-        assert zf.testzip() is None
-        assert "zarr.json" in zf.namelist()
 
-    store = zarr.storage.ZipStore(str(archive_path), mode="r")
-    group = zarr.open_group(store=store, mode="r")
-    result = group["0"][:]
-    assert (result[:, :4] == 1).all()
-    assert (result[:, 4:] == 2).all()
+def test_ozx_open_raises(tmp_path: pathlib.Path) -> None:
+    archive_path = tmp_path / "sample.ozx"
+    OMEZarrWriter(
+        store=str(archive_path),
+        level_shapes=[(4, 4)],
+        dtype=np.uint8,
+        zarr_format=3,
+    ).write_full_volume(np.zeros((4, 4), dtype=np.uint8))
+
+    with pytest.raises(ValueError, match="multi-process"):
+        OMEZarrWriter.open(str(archive_path))
 
 
 @pytest.mark.parametrize(
