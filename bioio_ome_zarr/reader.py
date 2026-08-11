@@ -93,7 +93,7 @@ class Reader(reader.Reader):
         directory mapper: they're opened with Zarr's own `ZipStore` instead.
         Only local files are supported for this today.
         """
-        if not cls._is_ozx_path(path):
+        if not path.lower().split("?")[0].endswith((".ozx", ".zip")):
             return fs.get_mapper(path)  # type: ignore[attr-defined]
 
         if not isinstance(fs, LocalFileSystem):

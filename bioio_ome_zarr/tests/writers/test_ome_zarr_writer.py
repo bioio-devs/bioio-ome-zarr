@@ -105,10 +105,6 @@ def test_writes_ozx_archive_with_compliant_metadata(tmp_path: pathlib.Path) -> N
         assert comment["ome"]["version"] == "0.5"
         assert comment["ome"]["zipFile"]["centralDirectory"]["jsonFirst"] is True
 
-    store = zarr.storage.ZipStore(str(archive_path), mode="r")
-    group = zarr.open_group(store=store, mode="r")
-    np.testing.assert_array_equal(group["0"][:], data)
-
 
 def test_ozx_requires_zarr_v3(tmp_path: pathlib.Path) -> None:
     with pytest.raises(ValueError, match="zarr_format=3"):
@@ -120,39 +116,31 @@ def test_ozx_requires_zarr_v3(tmp_path: pathlib.Path) -> None:
         )
 
 
-def test_ozx_multiple_write_region_calls_preserve_prior_writes(
-    tmp_path: pathlib.Path,
-) -> None:
-    """
-    Regression test: closing (or reopening) a ZipStore mid-stream truncates the
-    archive, so the writer must not finalize the store after every write call
-    -- only once, explicitly, via `close()`.
-    """
-    archive_path = tmp_path / "regions.ozx"
-
+def test_ozx_write_region_raises(tmp_path: pathlib.Path) -> None:
     with OMEZarrWriter(
-        store=str(archive_path),
+        store=str(tmp_path / "regions.ozx"),
         level_shapes=[(4, 8)],
         dtype=np.uint8,
         zarr_format=3,
-        chunk_shape=(4, 4),
     ) as writer:
-        writer.write_region(
-            np.full((4, 4), 1, dtype=np.uint8), (slice(0, 4), slice(0, 4))
-        )
-        writer.write_region(
-            np.full((4, 4), 2, dtype=np.uint8), (slice(0, 4), slice(4, 8))
-        )
+        with pytest.raises(ValueError, match="write_region"):
+            writer.write_region(
+                np.full((4, 8), 1, dtype=np.uint8), (slice(0, 4), slice(0, 8))
+            )
 
-    with zipfile.ZipFile(archive_path) as zf:
-        assert zf.testzip() is None
-        assert "zarr.json" in zf.namelist()
 
-    store = zarr.storage.ZipStore(str(archive_path), mode="r")
-    group = zarr.open_group(store=store, mode="r")
-    result = group["0"][:]
-    assert (result[:, :4] == 1).all()
-    assert (result[:, 4:] == 2).all()
+def test_ozx_open_raises(tmp_path: pathlib.Path) -> None:
+    archive_path = tmp_path / "sample.ozx"
+    with OMEZarrWriter(
+        store=str(archive_path),
+        level_shapes=[(4, 4)],
+        dtype=np.uint8,
+        zarr_format=3,
+    ) as writer:
+        writer.write_full_volume(np.zeros((4, 4), dtype=np.uint8))
+
+    with pytest.raises(ValueError, match="multi-process"):
+        OMEZarrWriter.open(str(archive_path))
 
 
 @pytest.mark.parametrize(

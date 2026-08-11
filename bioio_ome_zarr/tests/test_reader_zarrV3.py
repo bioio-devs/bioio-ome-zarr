@@ -1,3 +1,4 @@
+import pathlib
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -7,6 +8,7 @@ from ome_types import to_dict
 from zarr.core.group import GroupMetadata
 
 from bioio_ome_zarr import Reader
+from bioio_ome_zarr.writers import OMEZarrWriter
 
 from .conftest import LOCAL_RESOURCES_DIR
 
@@ -363,3 +365,22 @@ def test_read_ome_metadata_channels_no_color() -> None:
     uri = LOCAL_RESOURCES_DIR / "test_ngff_channel_no_color.zarr"
     reader = Reader(uri)
     assert reader.ome_metadata.images[0].pixels.channels[0].name == "random"
+
+
+def test_read_ozx_archive(tmp_path: pathlib.Path) -> None:
+    archive_path = tmp_path / "sample.ozx"
+    original = np.arange(32 * 32, dtype=np.uint8).reshape(32, 32)
+
+    with OMEZarrWriter(
+        store=str(archive_path),
+        level_shapes=[(32, 32)],
+        dtype=original.dtype,
+        zarr_format=3,
+        image_name="ozx-roundtrip",
+    ) as writer:
+        writer.write_full_volume(original)
+
+    reader = Reader(str(archive_path))
+    assert reader.scenes == ("ozx-roundtrip",)
+    result = reader.get_image_data()
+    np.testing.assert_array_equal(result.squeeze(), original)
