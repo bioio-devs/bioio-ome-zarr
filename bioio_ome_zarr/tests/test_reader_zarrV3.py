@@ -1,4 +1,5 @@
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pytest
@@ -339,3 +340,124 @@ def test_read_ome_metadata_channels_no_color() -> None:
     uri = LOCAL_RESOURCES_DIR / "test_ngff_channel_no_color.zarr"
     reader = Reader(uri)
     assert reader.ome_metadata.images[0].pixels.channels[0].name == "random"
+
+
+# Stores converted by bioio-conversion with include_provenance=True. Each carries
+# a root "bioio_conversion" attributes block pointing at a standard_metadata.json
+# sidecar holding the source reader's StandardMetadata.
+@pytest.mark.parametrize(
+    "filename, expected",
+    [
+        pytest.param(
+            "provenance_czi.ome.zarr",
+            {
+                "objective": "20x/0.8Air",
+                "binning": "4x4",
+                "imaged_by": "ruiany",
+                "imaging_datetime": datetime(
+                    2019, 6, 27, 18, 33, 40, 619371, tzinfo=timezone.utc
+                ),
+                "row": None,
+                "column": None,
+                "position_index": None,
+                "stage_position_x": 12345.67,
+                "stage_position_y": 2345.89,
+                # Single timepoint: the source measured no timing.
+                "timelapse_interval": None,
+                "total_time_duration": None,
+            },
+            id="czi",
+        ),
+        pytest.param(
+            "provenance_ome_tiff.ome.zarr",
+            {
+                "objective": "20x/0.8Air",
+                "binning": "4x4",
+                "imaged_by": "ruiany",
+                "imaging_datetime": datetime(2019, 6, 27, 18, 39, 25, 807000),
+                "row": None,
+                "column": None,
+                "position_index": None,
+                "stage_position_x": None,
+                "stage_position_y": None,
+                "timelapse_interval": None,
+                # Recorded by the source reader, in seconds.
+                "total_time_duration": timedelta(seconds=5.245),
+            },
+            id="ome-tiff",
+        ),
+        pytest.param(
+            "provenance_nd2_plate.ome.zarr",
+            {
+                "objective": "10x/0.3",
+                "binning": "1x1",
+                "imaged_by": None,
+                "imaging_datetime": datetime(
+                    2021,
+                    9,
+                    28,
+                    6,
+                    55,
+                    1,
+                    935004,
+                    tzinfo=timezone(timedelta(hours=-7)),
+                ),
+                # Plate-derived well, from a provenance reader opened with plate=96.
+                "row": "4",
+                "column": "3",
+                "position_index": None,
+                "stage_position_x": None,
+                "stage_position_y": None,
+                # Real acquisition timing, not the store's nominal T scale of 1.0.
+                "timelapse_interval": timedelta(seconds=18.49526),
+                "total_time_duration": timedelta(seconds=73.981041),
+            },
+            id="nd2-plate",
+        ),
+    ],
+)
+def test_standard_metadata_from_provenance(
+    filename: str, expected: Dict[str, Any]
+) -> None:
+    """Provenance-only fields are surfaced from the standard_metadata sidecar."""
+    reader = Reader(LOCAL_RESOURCES_DIR / filename)
+    metadata = reader.standard_metadata
+
+    for field, value in expected.items():
+        assert getattr(metadata, field) == value, field
+        # The same value is exposed as a reader property.
+        assert getattr(reader, field) == value, field
+
+
+@pytest.mark.parametrize(
+    "filename, expected_size_x, expected_size_y",
+    [
+        ("provenance_czi.ome.zarr", 475, 325),
+        ("provenance_ome_tiff.ome.zarr", 475, 325),
+        ("provenance_nd2_plate.ome.zarr", 32, 32),
+    ],
+)
+def test_standard_metadata_natively_derived_fields_win(
+    filename: str, expected_size_x: int, expected_size_y: int
+) -> None:
+    """Fields the store itself describes stay natively derived, not read from the
+    sidecar."""
+    metadata = Reader(LOCAL_RESOURCES_DIR / filename).standard_metadata
+    assert metadata.image_size_x == expected_size_x
+    assert metadata.image_size_y == expected_size_y
+
+
+def test_standard_metadata_without_provenance() -> None:
+    """Without a provenance block, provenance-only fields stay unset."""
+    metadata = Reader(LOCAL_RESOURCES_DIR / "s1_t1_c1_z1_Image_0_V3.zarr")
+    standard_metadata = metadata.standard_metadata
+    assert standard_metadata.objective is None
+    assert standard_metadata.row is None
+    assert standard_metadata.column is None
+    assert standard_metadata.binning is None
+    assert standard_metadata.imaged_by is None
+    assert standard_metadata.imaging_datetime is None
+    assert standard_metadata.stage_position_x is None
+    assert standard_metadata.stage_position_y is None
+    # Natively-derived fields are still populated.
+    assert standard_metadata.image_size_x is not None
