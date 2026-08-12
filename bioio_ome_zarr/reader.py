@@ -1,6 +1,8 @@
 #!/usr/bin/env python
+import json
 import logging
 import warnings
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,6 +10,7 @@ import dask.array as da
 import xarray as xr
 import zarr
 from bioio_base import constants, dimensions, exceptions, io, reader, types
+from bioio_base.standard_metadata import StandardMetadata
 from fsspec.spec import AbstractFileSystem
 from ome_types import OME
 from ome_types.model import Channel, Image, Pixels, PixelType
@@ -19,6 +22,10 @@ from . import utils as metadata_utils
 ###############################################################################
 
 log = logging.getLogger(__name__)
+
+# Provenance names mirrored from ``bioio_conversion.provenance``.
+PROVENANCE_ATTR_KEY = "bioio_conversion"
+STANDARD_METADATA_KEY = "standard_metadata"
 
 ###############################################################################
 
@@ -44,6 +51,8 @@ class Reader(reader.Reader):
 
     _fs: AbstractFileSystem
     _path: str
+
+    _provenance_standard_metadata: Optional[Dict[str, Any]] = None
 
     _current_scene_index: int = 0
 
@@ -571,3 +580,184 @@ class Reader(reader.Reader):
         self.set_scene(original_scene)
         self._ome_metadata = OME(images=images)
         return self._ome_metadata
+
+    def _read_standard_metadata_sidecar(self) -> Dict[str, Any]:
+        """Load the ``standard_metadata`` sidecar named by the provenance block."""
+        block = self._zarr.attrs.get(PROVENANCE_ATTR_KEY)
+        if not isinstance(block, dict):
+            return {}
+
+        rel_path = block.get(STANDARD_METADATA_KEY)
+        if not isinstance(rel_path, str):
+            return {}
+
+        sidecar_path = f"{self._path.rstrip('/')}/{rel_path}"
+        try:
+            with self._fs.open(sidecar_path, "rb") as open_sidecar:
+                fields = json.load(open_sidecar)
+        except Exception as exc:
+            log.warning(
+                "Could not read standard_metadata sidecar %r: %s", sidecar_path, exc
+            )
+            return {}
+
+        if not isinstance(fields, dict):
+            log.warning(
+                "standard_metadata sidecar %r is not a JSON object, ignoring it.",
+                sidecar_path,
+            )
+            return {}
+        return fields
+
+    @property
+    def _embedded_standard_metadata(self) -> Dict[str, Any]:
+        """
+        The source image's ``StandardMetadata`` fields, as recorded on conversion.
+
+        bioio-conversion writes the source's cross-format ``StandardMetadata``
+        to a JSON sidecar at the store root and points at it from the root
+        ``"bioio_conversion"`` attributes block, covering fields an OME-Zarr
+        store cannot reconstruct on its own. Read once and cached, since each
+        lookup would otherwise re-fetch the sidecar.
+        """
+        if self._provenance_standard_metadata is None:
+            self._provenance_standard_metadata = self._read_standard_metadata_sidecar()
+        return self._provenance_standard_metadata
+
+    @property
+    def objective(self) -> Optional[str]:
+        """Objective recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("objective")
+
+    @property
+    def row(self) -> Optional[str]:
+        """Well row recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("row")
+
+    @property
+    def column(self) -> Optional[str]:
+        """Well column recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("column")
+
+    @property
+    def binning(self) -> Optional[str]:
+        """Binning recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("binning")
+
+    @property
+    def position_index(self) -> Optional[int]:
+        """Position index recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("position_index")
+
+    @property
+    def imaged_by(self) -> Optional[str]:
+        """Experimenter recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("imaged_by")
+
+    @property
+    def stage_position_x(self) -> Optional[float]:
+        """Stage X position (µm) recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("stage_position_x")
+
+    @property
+    def stage_position_y(self) -> Optional[float]:
+        """Stage Y position (µm) recorded in the source provenance sidecar."""
+        return self._embedded_standard_metadata.get("stage_position_y")
+
+    @property
+    def imaging_datetime(self) -> Optional[datetime]:
+        """Acquisition datetime from the source provenance sidecar."""
+        raw = self._embedded_standard_metadata.get("imaging_datetime")
+        if raw is None or isinstance(raw, datetime):
+            return raw
+        try:
+            return datetime.fromisoformat(str(raw))
+        except ValueError as exc:
+            log.warning("Failed to parse imaging_datetime %r: %s", raw, exc)
+            return None
+
+    def _recorded_duration(self, field: str) -> Optional[timedelta]:
+        """A provenance duration, recorded as seconds by bioio-conversion."""
+        raw = self._embedded_standard_metadata.get(field)
+        if raw is None:
+            return None
+        try:
+            return timedelta(seconds=float(raw))
+        except (TypeError, ValueError) as exc:
+            log.warning("Failed to parse %s %r: %s", field, raw, exc)
+            return None
+
+    @property
+    def timelapse_interval(self) -> Optional[timedelta]:
+        """
+        Average interval between timepoints.
+
+        Prefers the interval the source reader measured, since a converted store
+        may carry a nominal T scale rather than the real acquisition timing.
+        Falls back to deriving it from the T scale and unit.
+        """
+        recorded = self._recorded_duration("timelapse_interval")
+        if recorded is not None:
+            return recorded
+
+        size_t = getattr(self.dims, dimensions.DimensionNames.Time, None)
+        if size_t is None or size_t < 2:
+            return None
+
+        interval = self.time_interval
+        if interval is None:
+            return None
+        unit = self.dimension_properties.T.unit
+        seconds = float(interval)
+        if unit is not None:
+            try:
+                seconds = float((interval * unit).to(types.ureg.second).magnitude)
+            except Exception as exc:
+                log.warning(
+                    "Could not convert T interval %r %s to seconds: %s",
+                    interval,
+                    unit,
+                    exc,
+                )
+        return timedelta(seconds=seconds)
+
+    @property
+    def total_time_duration(self) -> Optional[timedelta]:
+        """
+        Duration from the first to the last timepoint.
+
+        Prefers the duration the source reader measured; otherwise spans the
+        timepoints using :attr:`timelapse_interval`.
+        """
+        recorded = self._recorded_duration("total_time_duration")
+        if recorded is not None:
+            return recorded
+
+        interval = self.timelapse_interval
+        size_t = getattr(self.dims, dimensions.DimensionNames.Time, None)
+        if interval is None or size_t is None or size_t < 2:
+            return None
+        return interval * (size_t - 1)
+
+    @property
+    def standard_metadata(self) -> StandardMetadata:
+        """
+        Return the standard metadata for this reader, updating specific fields.
+
+        Extends the base reader's metadata with the source provenance fields and
+        the T-based durations, which an OME-Zarr store does not otherwise
+        populate.
+        """
+        metadata = super().standard_metadata
+        metadata.objective = self.objective
+        metadata.row = self.row
+        metadata.column = self.column
+        metadata.binning = self.binning
+        metadata.position_index = self.position_index
+        metadata.imaging_datetime = self.imaging_datetime
+        metadata.imaged_by = self.imaged_by
+        metadata.stage_position_x = self.stage_position_x
+        metadata.stage_position_y = self.stage_position_y
+        metadata.timelapse_interval = self.timelapse_interval
+        metadata.total_time_duration = self.total_time_duration
+        return metadata
