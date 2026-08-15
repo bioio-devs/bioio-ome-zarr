@@ -807,7 +807,6 @@ class OMEZarrWriter:
         if self.root is None:
             raise RuntimeError("Store must be initialized before writing metadata.")
         if self._use_zip:
-            # Metadata was set at group creation; only write the RFC-9 archive comment.
             zip_store = getattr(self.root, "store", None)
             if isinstance(zip_store, ZipStore):
                 zip_store._zf.comment = json.dumps(
