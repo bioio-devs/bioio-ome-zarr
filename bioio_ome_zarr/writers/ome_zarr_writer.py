@@ -192,6 +192,8 @@ class OMEZarrWriter:
         ----------
         store : Union[str, zarr.storage.StoreLike]
             Filesystem path, URL (via fsspec), or Store-like for the root group.
+            Paths ending in ``.zip`` or ``.ozx`` are written as zipped Zarr.
+            Existing data at this location is overwritten.
         level_shapes : Sequence[int] | Sequence[Sequence[int]]
             Level-0 shape or explicit per-level shapes (level 0 first).
         dtype : Union[np.dtype, str]
@@ -777,11 +779,12 @@ class OMEZarrWriter:
         self._initialized = True
 
     def _open_root(self) -> zarr.Group:
-        """Accept a path/URL or Store-like and return an opened root group."""
+        """
+        Accept a path/URL or Store-like and return an opened root group.
+        Any existing data at the store location is overwritten
+        """
         if self._use_zip:
             if isinstance(self.store, str):
-                # Append mode: ZipStore can't delete keys, so delete the file for a
-                # clean slate; append mode prevents dask unpickling from truncating it.
                 Path(self.store).unlink(missing_ok=True)
                 zip_store = ZipStore(
                     self.store, mode="a", compression=0, allowZip64=True
