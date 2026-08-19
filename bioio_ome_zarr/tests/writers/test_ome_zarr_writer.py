@@ -1,6 +1,7 @@
 import json
 import multiprocessing as mp
 import pathlib
+import zipfile
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import dask.array as da
@@ -74,6 +75,73 @@ def test_preview_metadata_merges_attributes(
     md = writer.preview_metadata()
     assert {key: md[key] for key in expected} == expected
     assert ("multiscales" if zarr_format == 2 else "ome") in md
+
+
+def test_writes_ozx_archive_with_compliant_metadata(tmp_path: pathlib.Path) -> None:
+    archive_path = tmp_path / "sample.ozx"
+    data = np.arange(16, dtype=np.uint8).reshape(4, 4)
+
+    with OMEZarrWriter(
+        store=str(archive_path),
+        level_shapes=[(4, 4)],
+        dtype=data.dtype,
+        zarr_format=3,
+        image_name="ozx-test",
+    ) as writer:
+        writer.write_full_volume(data)
+
+    with zipfile.ZipFile(archive_path) as zf:
+        names = zf.namelist()
+        assert names[0] == "zarr.json"
+        assert "0/zarr.json" in names
+        assert any(name.endswith("0/0") or name.endswith("0.0") for name in names)
+
+        # The archive must actually be readable: entries aren't just listed in
+        # the central directory, their bytes must round-trip too.
+        assert zf.testzip() is None
+        root_attrs = json.loads(zf.read("zarr.json"))["attributes"]
+        assert root_attrs["ome"]["version"] == "0.5"
+
+        comment = json.loads(zf.comment.decode("utf-8"))
+        assert comment["ome"]["version"] == "0.5"
+        assert comment["ome"]["zipFile"]["centralDirectory"]["jsonFirst"] is True
+
+
+def test_ozx_requires_zarr_v3(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(ValueError, match="zarr_format=3"):
+        OMEZarrWriter(
+            store=str(tmp_path / "sample.ozx"),
+            level_shapes=[(4, 4)],
+            dtype=np.uint8,
+            zarr_format=2,
+        )
+
+
+def test_ozx_write_region_raises(tmp_path: pathlib.Path) -> None:
+    with OMEZarrWriter(
+        store=str(tmp_path / "regions.ozx"),
+        level_shapes=[(4, 8)],
+        dtype=np.uint8,
+        zarr_format=3,
+    ) as writer:
+        with pytest.raises(ValueError, match="write_region"):
+            writer.write_region(
+                np.full((4, 8), 1, dtype=np.uint8), (slice(0, 4), slice(0, 8))
+            )
+
+
+def test_ozx_open_raises(tmp_path: pathlib.Path) -> None:
+    archive_path = tmp_path / "sample.ozx"
+    with OMEZarrWriter(
+        store=str(archive_path),
+        level_shapes=[(4, 4)],
+        dtype=np.uint8,
+        zarr_format=3,
+    ) as writer:
+        writer.write_full_volume(np.zeros((4, 4), dtype=np.uint8))
+
+    with pytest.raises(ValueError, match="multi-process"):
+        OMEZarrWriter.open(str(archive_path))
 
 
 @pytest.mark.parametrize(

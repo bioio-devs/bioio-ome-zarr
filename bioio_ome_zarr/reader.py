@@ -11,11 +11,13 @@ import xarray as xr
 import zarr
 from bioio_base import constants, dimensions, exceptions, io, reader, types
 from bioio_base.standard_metadata import StandardMetadata
+from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractFileSystem
 from ome_types import OME
 from ome_types.model import Channel, Image, Pixels, PixelType
 from s3fs import S3FileSystem
 from zarr.core.group import GroupMetadata
+from zarr.storage import ZipStore
 
 from . import utils as metadata_utils
 
@@ -72,7 +74,7 @@ class Reader(reader.Reader):
         # Validate the store – this will raise if unsupported
         self._is_supported_image(fs=self._fs, path=self._path, fs_kwargs=fs_kwargs)
 
-        store = self._fs.get_mapper(self._path)  # type: ignore[attr-defined]
+        store = self._open_store(fs=self._fs, path=self._path)
         self._zarr = zarr.open_group(store=store, mode="r")
 
         self._multiscales_metadata = self._zarr.attrs.get("ome", {}).get(
@@ -86,6 +88,33 @@ class Reader(reader.Reader):
         )
 
     @staticmethod
+    def _is_ozx_path(path: str) -> bool:
+        """Whether `path` refers to a zipped OME-Zarr archive (RFC-9 `.ozx`)."""
+        return path.lower().split("?")[0].endswith((".ozx", ".zip"))
+
+    @classmethod
+    def _open_store(cls, fs: AbstractFileSystem, path: str) -> "zarr.storage.StoreLike":
+        """
+        Return a store/mapper `zarr.open_group` can read from.
+
+        Zipped OME-Zarr (`.ozx`/`.zip`, RFC-9) archives are a single file, not
+        a directory of keys, so they can't be read through the usual fsspec
+        directory mapper: they're opened with Zarr's own `ZipStore` instead.
+        Only local files are supported for this today.
+        """
+        if not path.lower().split("?")[0].endswith((".ozx", ".zip")):
+            return fs.get_mapper(path)  # type: ignore[attr-defined]
+
+        if not isinstance(fs, LocalFileSystem):
+            raise exceptions.UnsupportedFileFormatError(
+                cls.__name__,
+                path,
+                "Reading zipped OME-Zarr (.ozx/.zip) archives is only "
+                "supported for local files.",
+            )
+        return ZipStore(fs._strip_protocol(path), mode="r")
+
+    @staticmethod
     def _is_supported_image(
         fs: AbstractFileSystem, path: str, fs_kwargs: Dict[str, Any], **kwargs: Any
     ) -> bool:
@@ -97,7 +126,7 @@ class Reader(reader.Reader):
             )
 
         try:
-            store = fs.get_mapper(path)
+            store = Reader._open_store(fs=fs, path=path)
             group = zarr.open_group(store=store, mode="r")
             attrs = group.attrs.asdict()
 

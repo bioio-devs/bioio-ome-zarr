@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import dask.array as da
@@ -6,8 +8,15 @@ import numpy as np
 import zarr
 from numcodecs import Blosc as BloscV2
 from zarr.codecs import BloscCodec, BloscShuffle
+from zarr.storage import ZipStore
 
-from .metadata import Axes, Channel, MetadataParams, build_ngff_metadata
+from .metadata import (
+    OME_NGFF_VERSION_V05,
+    Axes,
+    Channel,
+    MetadataParams,
+    build_ngff_metadata,
+)
 from .utils import (
     DimSeq,
     PerLevelDimSeq,
@@ -183,6 +192,8 @@ class OMEZarrWriter:
         ----------
         store : Union[str, zarr.storage.StoreLike]
             Filesystem path, URL (via fsspec), or Store-like for the root group.
+            Paths ending in ``.zip`` or ``.ozx`` are written as zipped Zarr.
+            Existing data at this location is overwritten.
         level_shapes : Sequence[int] | Sequence[Sequence[int]]
             Level-0 shape or explicit per-level shapes (level 0 first).
         dtype : Union[np.dtype, str]
@@ -226,6 +237,9 @@ class OMEZarrWriter:
             raise ValueError("level_shapes cannot be empty")
 
         self.store = store
+        self._use_zip: bool = isinstance(store, ZipStore) or (
+            isinstance(store, str) and store.lower().endswith((".ozx", ".zip"))
+        )
         self.dtype = np.dtype(dtype)
 
         if isinstance(level_shapes[0], (int, np.integer)):
@@ -312,6 +326,12 @@ class OMEZarrWriter:
             shards_per_level=self.shards_per_level,
             zarr_format=self.zarr_format,
         )
+
+        if self._use_zip and self.zarr_format != 3:
+            raise ValueError(
+                "ZIP-backed OME-Zarr (.ozx) requires zarr_format=3 (NGFF 0.5); "
+                f"got zarr_format={self.zarr_format}."
+            )
 
         # Metadata fields
         self.image_name = image_name or "Image"
@@ -407,6 +427,14 @@ class OMEZarrWriter:
         """
         self = cls.__new__(cls)
         self.store = store
+        self._use_zip = isinstance(store, ZipStore) or (
+            isinstance(store, str) and store.lower().endswith((".ozx", ".zip"))
+        )
+        if self._use_zip:
+            raise ValueError(
+                "OZX archives do not support multi-process writes. "
+                "Use write_full_volume() or write_timepoints() instead."
+            )
         self.root = zarr.open_group(store, mode="r+")
         self.datasets = []
         level = 0
@@ -627,6 +655,12 @@ class OMEZarrWriter:
             regions are derived by scaling these bounds.
 
         """
+        if self._use_zip:
+            raise ValueError(
+                "OZX archives do not support write_region(). "
+                "Use write_full_volume() or write_timepoints() instead."
+            )
+
         self._initialize()
 
         level0_shape = self.datasets[0].shape
@@ -652,6 +686,18 @@ class OMEZarrWriter:
             cur = da.from_array(np_cur, chunks=np_cur.shape)
 
             array[region_level] = np_cur
+
+    def close(self) -> None:
+        """Close the store. Required for ZIP-backed targets; no-op otherwise."""
+        store = getattr(getattr(self, "root", None), "store", None)
+        if isinstance(store, ZipStore):
+            store.close()
+
+    def __enter__(self) -> "OMEZarrWriter":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
 
     # -----------------
     # Internal plumbing
@@ -733,7 +779,26 @@ class OMEZarrWriter:
         self._initialized = True
 
     def _open_root(self) -> zarr.Group:
-        """Accept a path/URL or Store-like and return an opened root group."""
+        """
+        Accept a path/URL or Store-like and return an opened root group.
+        Any existing data at the store location is overwritten
+        """
+        if self._use_zip:
+            if isinstance(self.store, str):
+                Path(self.store).unlink(missing_ok=True)
+                zip_store = ZipStore(
+                    self.store, mode="a", compression=0, allowZip64=True
+                )
+            else:
+                zip_store = self.store  # type: ignore[assignment]
+            # attributes= at creation: ZipStore can't delete keys, so a later
+            # attrs.update() would write a duplicate zarr.json rather than replace it.
+            return zarr.group(
+                store=zip_store,
+                overwrite=True,
+                zarr_format=self.zarr_format,
+                attributes=self.preview_metadata(),
+            )
         return zarr.group(
             store=self.store,
             overwrite=True,
@@ -744,4 +809,16 @@ class OMEZarrWriter:
         """Persist NGFF metadata to the root group."""
         if self.root is None:
             raise RuntimeError("Store must be initialized before writing metadata.")
+        if self._use_zip:
+            zip_store = getattr(self.root, "store", None)
+            if isinstance(zip_store, ZipStore):
+                zip_store._zf.comment = json.dumps(
+                    {
+                        "ome": {
+                            "version": OME_NGFF_VERSION_V05,
+                            "zipFile": {"centralDirectory": {"jsonFirst": True}},
+                        }
+                    }
+                ).encode("utf-8")
+            return
         self.root.attrs.update(self.preview_metadata())
