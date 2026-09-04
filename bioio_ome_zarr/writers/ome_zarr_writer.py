@@ -682,8 +682,10 @@ class OMEZarrWriter:
                     for ax in range(data.ndim)
                 )
 
-            np_cur = cur.compute(scheduler="synchronous")
-            cur = da.from_array(np_cur, chunks=np_cur.shape)
+                np_cur = cur.compute(scheduler="synchronous")
+                cur = da.from_array(np_cur, chunks=np_cur.shape)
+            else:
+                np_cur = data
 
             array[region_level] = np_cur
 
