@@ -664,7 +664,12 @@ class OMEZarrWriter:
         self._initialize()
 
         level0_shape = self.datasets[0].shape
-        cur = da.from_array(data, chunks=data.shape)
+        # Level 0 is written from the caller's buffer as-is. Routing it through
+        # dask only to route it straight back out costs three full-array copies
+        # per call: ``from_array`` hashes the buffer to name the graph,
+        # ``compute`` returns a copy rather than the original, and the rewrap
+        # hashes it again. On a single-chunk array none of that buys anything.
+        np_cur = data
         region_level: Tuple[slice, ...] = region
         for level_index, array in enumerate(self.datasets):
             if level_index > 0:
@@ -673,17 +678,21 @@ class OMEZarrWriter:
                     max(1, int((region[ax].stop - region[ax].start) * scales[ax]))
                     for ax in range(data.ndim)
                 )
-                cur = resize(cur, scaled_shape, order=0).astype(data.dtype)
+                # ``resize`` needs a dask array; name=False skips the content
+                # hash, which would otherwise copy the whole level again.
+                cur = da.from_array(np_cur, chunks=np_cur.shape, name=False)
+                np_cur = (
+                    resize(cur, scaled_shape, order=0)
+                    .astype(data.dtype)
+                    .compute(scheduler="synchronous")
+                )
                 region_level = tuple(
                     slice(
                         int(region[ax].start * scales[ax]),
-                        int(region[ax].start * scales[ax]) + int(cur.shape[ax]),
+                        int(region[ax].start * scales[ax]) + int(np_cur.shape[ax]),
                     )
                     for ax in range(data.ndim)
                 )
-
-            np_cur = cur.compute(scheduler="synchronous")
-            cur = da.from_array(np_cur, chunks=np_cur.shape)
 
             array[region_level] = np_cur
 
