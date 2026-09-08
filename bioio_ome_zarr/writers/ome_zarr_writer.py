@@ -664,7 +664,8 @@ class OMEZarrWriter:
         self._initialize()
 
         level0_shape = self.datasets[0].shape
-        cur = da.from_array(data, chunks=data.shape)
+        np_cur = data
+        cur = da.from_array(np_cur, chunks=np_cur.shape)
         region_level: Tuple[slice, ...] = region
         for level_index, array in enumerate(self.datasets):
             if level_index > 0:
@@ -682,8 +683,8 @@ class OMEZarrWriter:
                     for ax in range(data.ndim)
                 )
 
-            np_cur = cur.compute(scheduler="synchronous")
-            cur = da.from_array(np_cur, chunks=np_cur.shape)
+                np_cur = cur.compute(scheduler="synchronous")
+                cur = da.from_array(np_cur, chunks=np_cur.shape)
 
             array[region_level] = np_cur
 
