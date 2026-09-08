@@ -665,10 +665,10 @@ class OMEZarrWriter:
 
         if isinstance(data, np.ndarray):
             np_cur = data
-            cur = da.from_array(np_cur, chunks=np_cur.shape)
+            da_cur = da.from_array(np_cur, chunks=np_cur.shape)
         else:
-            cur = data
-            np_cur = cur.compute(scheduler="synchronous")
+            da_cur = data
+            np_cur = da_cur.compute(scheduler="synchronous")
 
         level0_shape = self.datasets[0].shape
         region_level: Tuple[slice, ...] = region
@@ -679,16 +679,16 @@ class OMEZarrWriter:
                     max(1, int((region[ax].stop - region[ax].start) * scales[ax]))
                     for ax in range(data.ndim)
                 )
-                cur = resize(cur, scaled_shape, order=0).astype(data.dtype)
+                da_cur = resize(da_cur, scaled_shape, order=0).astype(data.dtype)
                 region_level = tuple(
                     slice(
                         int(region[ax].start * scales[ax]),
-                        int(region[ax].start * scales[ax]) + int(cur.shape[ax]),
+                        int(region[ax].start * scales[ax]) + int(da_cur.shape[ax]),
                     )
                     for ax in range(data.ndim)
                 )
 
-                np_cur = cur.compute(scheduler="synchronous")
+                np_cur = da_cur.compute(scheduler="synchronous")
 
             array[region_level] = np_cur
 
