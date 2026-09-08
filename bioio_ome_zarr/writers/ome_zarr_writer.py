@@ -633,7 +633,7 @@ class OMEZarrWriter:
 
     def write_region(
         self,
-        data: np.ndarray,
+        data: Union[np.ndarray, da.Array],
         region: Tuple[slice, ...],
     ) -> None:
         """
@@ -646,7 +646,7 @@ class OMEZarrWriter:
 
         Parameters
         ----------
-        data : np.ndarray
+        data : np.ndarray | dask.array.Array
             Block in writer axis order. Its shape must equal the level-0 extent
             of ``region`` (i.e. ``stop - start`` for each axis).
         region : Tuple[slice, ...]
@@ -663,9 +663,14 @@ class OMEZarrWriter:
 
         self._initialize()
 
+        if isinstance(data, np.ndarray):
+            np_cur = data
+            cur = da.from_array(np_cur, chunks=np_cur.shape)
+        else:
+            cur = data
+            np_cur = cur.compute(scheduler="synchronous")
+
         level0_shape = self.datasets[0].shape
-        np_cur = data
-        cur = da.from_array(np_cur, chunks=np_cur.shape)
         region_level: Tuple[slice, ...] = region
         for level_index, array in enumerate(self.datasets):
             if level_index > 0:
@@ -684,7 +689,6 @@ class OMEZarrWriter:
                 )
 
                 np_cur = cur.compute(scheduler="synchronous")
-                cur = da.from_array(np_cur, chunks=np_cur.shape)
 
             array[region_level] = np_cur
 
