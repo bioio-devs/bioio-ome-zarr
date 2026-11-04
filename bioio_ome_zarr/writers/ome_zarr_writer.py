@@ -77,8 +77,7 @@ def _normalize_levelwise(
     for level_index, per_level_shape in enumerate(per_level_shapes):
         if len(per_level_shape) != ndim:
             raise ValueError(
-                f"{label}[{level_index}] length {len(per_level_shape)} != "
-                f"ndim {ndim}"
+                f"{label}[{level_index}] length {len(per_level_shape)} != ndim {ndim}"
             )
         level_tuple = tuple(dim for dim in per_level_shape)
         for axis_index, value in enumerate(level_tuple):
@@ -112,7 +111,7 @@ def _validate_shapes(
     ) -> None:
         if len(seq) != expected:
             raise ValueError(
-                f"{label} must have {expected} entries (per level), got " f"{len(seq)}"
+                f"{label} must have {expected} entries (per level), got {len(seq)}"
             )
 
     def expect_ndim_match(
@@ -122,8 +121,7 @@ def _validate_shapes(
     ) -> None:
         if len(shape_tuple) != num_dims:
             raise ValueError(
-                f"{label}[{level_index}] length {len(shape_tuple)} != "
-                f"ndim {num_dims}"
+                f"{label}[{level_index}] length {len(shape_tuple)} != ndim {num_dims}"
             )
 
     # ---- chunk shapes ----
