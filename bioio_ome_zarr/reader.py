@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import dask.array as da
+import numpy as np
 import xarray as xr
 import zarr
 from bioio_base import constants, dimensions, exceptions, io, reader, types
@@ -226,6 +227,44 @@ class Reader(reader.Reader):
     def _read_immediate(self) -> xr.DataArray:
         return self._xarr_format(delayed=False)
 
+    def _current_array(self) -> zarr.Array:
+        """The Zarr array of the current scene and resolution level."""
+        multiscales = self._multiscales_metadata[self._current_scene_index]
+        datasets = multiscales.get("datasets", [])
+        return self._zarr[datasets[self._current_resolution_level].get("path")]
+
+    def _read_indexed(self, given_dims: str, dim_specs: List[Any]) -> np.ndarray:
+        """
+        Return the native-order array with ``dim_specs`` applied, reading only
+        the chunks the selection touches.
+
+        The base implementation indexes ``self.data``, which reads every chunk
+        of the current resolution level first. Each spec selects along its own
+        dimension (orthogonal indexing).
+
+        Parameters
+        ----------
+        given_dims: str
+            The native dimension ordering of the image (``self.dims.order``).
+        dim_specs: List[Any]
+            One getitem operation per dimension in ``given_dims``, as produced by
+            ``transforms.compute_dim_specs``: an int, a slice or a list of ints.
+
+        Returns
+        -------
+        data: np.ndarray
+            The indexed image data in native (reduced) dimension order.
+        """
+        array = self._current_array()
+        # Zarr only slices forwards: select the same indices explicitly
+        selection = tuple(
+            np.arange(size)[spec]
+            if isinstance(spec, slice) and (spec.step or 1) < 0
+            else spec
+            for spec, size in zip(dim_specs, array.shape, strict=True)
+        )
+        return np.asarray(array.get_orthogonal_selection(selection))
+
     def _xarr_format(self, delayed: bool) -> xr.DataArray:
         """
         Build an xarray.DataArray for the current scene and resolution level.
@@ -247,10 +286,7 @@ class Reader(reader.Reader):
         * Attaches the original Zarr attributes under
           `constants.METADATA_UNPROCESSED`.
         """
-        multiscales = self._multiscales_metadata[self._current_scene_index]
-        datasets = multiscales.get("datasets", [])
-        data_path = datasets[self._current_resolution_level].get("path")
-        arr = self._zarr[data_path]
+        arr = self._current_array()
 
         if delayed:
             data = da.from_array(arr, chunks=arr.chunks)
