@@ -233,7 +233,9 @@ class Reader(reader.Reader):
         datasets = multiscales.get("datasets", [])
         return self._zarr[datasets[self._current_resolution_level].get("path")]
 
-    def _read_indexed(self, given_dims: str, dim_specs: List[Any]) -> np.ndarray:
+    def _read_indexed(
+        self, given_dims: str, dim_specs: List[types.DimSpec]
+    ) -> np.ndarray:
         """
         Return the native-order array with ``dim_specs`` applied, reading only
         the chunks the selection touches.
@@ -246,7 +248,7 @@ class Reader(reader.Reader):
         ----------
         given_dims: str
             The native dimension ordering of the image (``self.dims.order``).
-        dim_specs: List[Any]
+        dim_specs: List[types.DimSpec]
             One getitem operation per dimension in ``given_dims``, as produced by
             ``transforms.compute_dim_specs``: an int, a slice or a list of ints.
 
