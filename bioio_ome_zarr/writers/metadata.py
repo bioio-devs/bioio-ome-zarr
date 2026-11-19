@@ -214,6 +214,8 @@ class MetadataParams:
         For levels > 0, per-axis *relative size vs. level 0*.
         Example: for level 1 where spatial dims halve, use [1,1,1,0.5,0.5].
         If None, only level 0 is expected.
+    translations : Optional[List[List[float]]]
+        Per-level offsets in axis units, including level 0.
     """
 
     image_name: str
@@ -224,6 +226,7 @@ class MetadataParams:
     creator_info: Optional[Dict[str, Any]] = None
     root_transform: Optional[Dict[str, Any]] = None
     dataset_scales: Optional[List[List[float]]] = None
+    translations: Optional[List[List[float]]] = None
 
 
 def build_ngff_metadata(
@@ -253,10 +256,8 @@ def build_ngff_metadata(
 # ----------------------------------------------------------------------
 
 
-def _build_ngff_v04(p: MetadataParams) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Build NGFF 0.4 `multiscales` and `omero` dicts (Zarr v2 layout)."""
-    axes_list = p.axes.to_metadata()
-
+def _build_multiscale(p: MetadataParams) -> Dict[str, Any]:
+    """Build the multiscale metadata shared by NGFF 0.4 and 0.5."""
     datasets: List[Dict[str, Any]] = []
     for lvl in range(len(p.level_shapes)):
         scale_vec: List[float] = []
@@ -270,28 +271,35 @@ def _build_ngff_v04(p: MetadataParams) -> Tuple[List[Dict[str, Any]], Dict[str, 
                     rel_size = 1.0
                 scale_vec.append(base * (1.0 / rel_size))
 
-        datasets.append(
-            {
-                "path": str(lvl),
-                "coordinateTransformations": [
-                    {
-                        "type": "scale",
-                        "scale": scale_vec,
-                    }
-                ],
-            }
-        )
+        transforms = [{"type": "scale", "scale": scale_vec}]
+        if p.translations is not None:
+            transforms.append(
+                {"type": "translation", "translation": p.translations[lvl].copy()}
+            )
+        datasets.append({"path": str(lvl), "coordinateTransformations": transforms})
 
     multiscale: Dict[str, Any] = {
-        "axes": axes_list,
+        "axes": p.axes.to_metadata(),
         "datasets": datasets,
         "name": p.image_name,
-        "version": OME_NGFF_VERSION_V04,
     }
 
-    # Only include root transform if explicitly provided
     if p.root_transform is not None:
-        multiscale["coordinateTransformations"] = [p.root_transform]
+        root_transforms = [p.root_transform]
+        if p.root_transform.get("type") == "translation":
+            # NGFF requires a scale before the translation at both levels.
+            root_transforms.insert(
+                0, {"type": "scale", "scale": [1.0] * len(p.axes.names)}
+            )
+        multiscale["coordinateTransformations"] = root_transforms
+
+    return multiscale
+
+
+def _build_ngff_v04(p: MetadataParams) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Build NGFF 0.4 `multiscales` and `omero` dicts (Zarr v2 layout)."""
+    multiscale = _build_multiscale(p)
+    multiscale["version"] = OME_NGFF_VERSION_V04
 
     multiscales = [multiscale]
 
@@ -327,44 +335,10 @@ def _build_ngff_v04(p: MetadataParams) -> Tuple[List[Dict[str, Any]], Dict[str, 
 
 def _build_ngff_v05(p: MetadataParams) -> Dict[str, Any]:
     """Build NGFF 0.5 `ome` dict with multiscales and optional OMERO (Zarr v3)."""
-    axes_list = p.axes.to_metadata()
-
-    datasets: List[Dict[str, Any]] = []
-    for lvl in range(len(p.level_shapes)):
-        scale_vec: List[float] = []
-        for i in range(len(p.axes.names)):
-            base = float(p.axes.scales[i] if i < len(p.axes.scales) else 1.0)
-            if lvl == 0 or p.dataset_scales is None:
-                scale_vec.append(base)
-            else:
-                rel_size = float(p.dataset_scales[lvl - 1][i])
-                if rel_size == 0.0:
-                    rel_size = 1.0
-                scale_vec.append(base * (1.0 / rel_size))
-
-        datasets.append(
-            {
-                "path": str(lvl),
-                "coordinateTransformations": [
-                    {
-                        "type": "scale",
-                        "scale": scale_vec,
-                    }
-                ],
-            }
-        )
-
-    multiscale: Dict[str, Any] = {
-        "name": p.image_name,
-        "axes": axes_list,
-        "datasets": datasets,
+    ome: Dict[str, Any] = {
+        "version": OME_NGFF_VERSION_V05,
+        "multiscales": [_build_multiscale(p)],
     }
-
-    # Only include root transform if explicitly provided
-    if p.root_transform is not None:
-        multiscale["coordinateTransformations"] = [p.root_transform]
-
-    ome: Dict[str, Any] = {"version": OME_NGFF_VERSION_V05, "multiscales": [multiscale]}
 
     # Optional OMERO block
     if p.channels:

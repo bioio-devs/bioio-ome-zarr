@@ -308,15 +308,15 @@ class Reader(reader.Reader):
             attrs={constants.METADATA_UNPROCESSED: self.metadata},
         )
 
-    @staticmethod
     def _get_coords(
+        self,
         dims: List[str],
         shape: Tuple[int, ...],
         scene: str,
         channel_names: Optional[List[str]],
     ) -> Dict[str, Any]:
         """
-        Construct coordinate mappings for each dimension, currently only Channel.
+        Build channel labels and physical coordinates for translated images.
 
         Parameters
         ----------
@@ -333,10 +333,10 @@ class Reader(reader.Reader):
         Returns
         -------
         coords : dict
-            A mapping from dimension name to coordinate values. Only includes
-            entries for Channel if present in `dims`.
+            A mapping from dimension name to coordinate values. Numeric
+            coordinates are in the units declared by the NGFF axes.
         """
-        coords = {}
+        coords: Dict[str, Any] = {}
         if dimensions.DimensionNames.Channel in dims:
             # Generate channel names if no existing channel names
             if channel_names is None:
@@ -346,31 +346,100 @@ class Reader(reader.Reader):
                 ]
             else:
                 coords[dimensions.DimensionNames.Channel] = channel_names
+
+        try:
+            transforms = self._get_coordinate_transforms()
+            if not any(
+                t.get("type") == "translation" or "translation" in t
+                for group in transforms
+                for t in group
+            ):
+                return coords
+            scale, translation = self._compose_transforms(
+                transforms, len(dims), include_translation=True
+            )
+        except (
+            AttributeError,
+            KeyError,
+            OSError,
+            OverflowError,
+            TypeError,
+            ValueError,
+        ) as e:
+            warnings.warn(f"Could not parse coordinate translations: {e}", stacklevel=2)
+            return coords
+
+        multiscales = self._multiscales_metadata[self._current_scene_index]
+        units = {
+            axis["name"].upper(): axis["unit"]
+            for axis in multiscales.get("axes") or []
+            if axis.get("unit") is not None
+        }
+        for i, (dim, size) in enumerate(zip(dims, shape)):
+            if dim != dimensions.DimensionNames.Channel:
+                values = np.arange(size, dtype=float) * scale[i] + translation[i]
+                attrs = {"units": units[dim]} if dim in units else {}
+                coords[dim] = (dim, values, attrs)
         return coords
 
-    def _get_scale_array(self, dims: Tuple[str, ...]) -> List[float]:
-        """
-        Compute combined scale factors for each dimension by merging the
-        overall and per-dataset coordinate transformations.
-
-        Parameters
-        ----------
-        dims : tuple of str
-            The dimension names in order (e.g. ("T","C","Z","Y","X")).
-
-        Returns
-        -------
-        scale : list of float
-            The elementwise product of the global and dataset-specific scales.
-        """
+    def _get_coordinate_transforms(
+        self,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Return the current-level and shared transform lists."""
         multiscales = self._multiscales_metadata[self._current_scene_index]
-        overall_scale = multiscales.get(
-            "coordinateTransformations", [{"scale": [1.0] * len(dims)}]
-        )[0]["scale"]
-        dataset_scale = multiscales["datasets"][self._current_resolution_level][
-            "coordinateTransformations"
-        ][0]["scale"]
-        return [o * d for o, d in zip(overall_scale, dataset_scale)]
+        dataset = multiscales["datasets"][self._current_resolution_level]
+        return (
+            dataset.get("coordinateTransformations") or [],
+            multiscales.get("coordinateTransformations") or [],
+        )
+
+    def _transform_vector(
+        self, transform: Dict[str, Any], kind: str, ndim: int
+    ) -> np.ndarray:
+        values = transform.get(kind)
+        if values is None:
+            array = self._zarr[transform["path"]]
+            if not isinstance(array, zarr.Array) or array.shape != (ndim,):
+                raise ValueError(f"{kind} path must refer to a vector of length {ndim}")
+            values = array[:]
+        vector = np.asarray(values, dtype=float)
+        if kind == "scale" and vector.ndim == 1:
+            # Older stores can carry scale entries for unused axes.
+            vector = vector[:ndim]
+        if vector.shape != (ndim,) or not np.isfinite(vector).all():
+            raise ValueError(f"{kind} must contain {ndim} finite values")
+        return vector
+
+    def _compose_transforms(
+        self,
+        transforms: Tuple[List[Dict[str, Any]], List[Dict[str, Any]]],
+        ndim: int,
+        *,
+        include_translation: bool,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        dataset, shared = transforms
+        if not any(t.get("type") == "scale" or "scale" in t for t in dataset):
+            raise ValueError("The current level has no scale transformation")
+        scale = np.ones(ndim)
+        translation = np.zeros(ndim)
+        for transform in (*dataset, *shared):
+            kind = transform.get("type")
+            if kind == "scale" or "scale" in transform:
+                vector = self._transform_vector(transform, "scale", ndim)
+                scale *= vector
+                translation *= vector
+            elif include_translation and (
+                kind == "translation" or "translation" in transform
+            ):
+                translation += self._transform_vector(transform, "translation", ndim)
+        return scale, translation
+
+    def _get_scale_array(self, dims: Tuple[str, ...]) -> List[float]:
+        """Compute the combined scales for the current scene and resolution."""
+        scale, _ = self._compose_transforms(
+            self._get_coordinate_transforms(), len(dims), include_translation=False
+        )
+        return scale.tolist()
 
     @property
     def time_interval(self) -> Optional[types.TimeInterval]:

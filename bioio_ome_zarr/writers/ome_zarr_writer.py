@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import dask.array as da
 import numcodecs
@@ -180,6 +180,7 @@ class OMEZarrWriter:
         axes_units: Optional[List[Optional[str]]] = None,
         physical_pixel_size: Optional[List[float]] = None,
         attributes: Optional[AttributesSpec] = None,
+        translations: Optional[Sequence[Sequence[float]]] = None,
     ) -> None:
         """
         Initialize the writer and capture core configuration. Arrays and
@@ -230,6 +231,10 @@ class OMEZarrWriter:
             Physical scale at level 0 for each axis.
         attributes : Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]
             Extra key/values merged into the root group's attributes.
+        translations : Optional[Sequence[Sequence[float]]]
+            One offset per axis, in axis order and units, for each level
+            including level 0. Offsets are applied after the level's scale
+            and before any multiscale root transform.
         """
         if len(level_shapes) == 0:
             raise ValueError("level_shapes cannot be empty")
@@ -258,6 +263,22 @@ class OMEZarrWriter:
         self.shape = tuple(self.level_shapes[0])
         self.ndim = len(self.shape)
         self.num_levels = len(self.level_shapes)
+
+        self.translations: Optional[List[List[float]]] = None
+        if translations is not None:
+            message = (
+                "translations must provide one finite offset per axis at each level"
+            )
+            try:
+                offsets = np.asarray(translations, dtype=float)
+            except (TypeError, ValueError, OverflowError) as e:
+                raise ValueError(message) from e
+            if (
+                offsets.shape != (self.num_levels, self.ndim)
+                or not np.isfinite(offsets).all()
+            ):
+                raise ValueError(message)
+            self.translations = offsets.tolist()
 
         # Axes
         if axes_names is not None and len(axes_names) != self.ndim:
@@ -363,6 +384,7 @@ class OMEZarrWriter:
             creator_info=self.creator_info,
             root_transform=self.root_transform,
             dataset_scales=self.dataset_scales,
+            translations=self.translations,
         )
         md = build_ngff_metadata(
             zarr_format=self.zarr_format,
