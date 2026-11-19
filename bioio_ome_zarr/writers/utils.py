@@ -1,5 +1,6 @@
 import math
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -29,14 +30,21 @@ class ZarrLevel:
     zarray: zarr.Array
 
 
+def _resize_chunks(
+    image_shape: DimSeq, output_shape: DimSeq, chunk_shape: DimSeq
+) -> Tuple[np.ndarray, Tuple[int, ...]]:
+    factors = np.array(output_shape) / np.array(image_shape, float)
+    better_chunksize = tuple(
+        np.maximum(1, np.ceil(np.array(chunk_shape) * factors) / factors).astype(int)
+    )
+    return factors, better_chunksize
+
+
 def resize(
     image: da.Array, output_shape: Tuple[int, ...], *args: Any, **kwargs: Any
 ) -> da.Array:
-    factors = np.array(output_shape) / np.array(image.shape, float)
-    better_chunksize = tuple(
-        np.maximum(1, np.ceil(np.array(image.chunksize) * factors) / factors).astype(
-            int
-        )
+    factors, better_chunksize = _resize_chunks(
+        image.shape, output_shape, image.chunksize
     )
     image_prepared = image.rechunk(better_chunksize)
 
@@ -57,6 +65,51 @@ def resize(
         resize_block, image_prepared, dtype=image.dtype, chunks=block_output_shape
     )[output_slices]
     return output.rechunk(image.chunksize).astype(image.dtype)
+
+
+@cache
+def _integer_resize_skips_antialiasing() -> bool:
+    # Older scikit-image versions antialias integer images even with order=0.
+    impulse = np.array([0, 100, 0, 0], dtype=np.uint16)
+    default = skimage.transform.resize(impulse, (2,), order=0)
+    unfiltered = skimage.transform.resize(impulse, (2,), order=0, anti_aliasing=False)
+    return np.array_equal(default, unfiltered)
+
+
+def _resize_region(image: np.ndarray, output_shape: Tuple[int, ...]) -> np.ndarray:
+    """Resize a NumPy block with the sampling used by ``resize(order=0)``."""
+    factors, chunks = _resize_chunks(image.shape, output_shape, image.shape)
+    if any(chunk < size for chunk, size in zip(chunks, image.shape)):
+        # Rounding can split the original chunk for some fractional factors.
+        chunked = da.from_array(image, chunks=image.shape)
+        return resize(chunked, output_shape, order=0).compute(scheduler="synchronous")
+
+    resized_shape = tuple(np.ceil(np.array(image.shape) * factors).astype(int))
+    if (
+        image.dtype.kind in "bui"
+        and image.dtype.itemsize <= 4
+        and _integer_resize_skips_antialiasing()
+    ):
+        if image.shape == output_shape:
+            return image
+
+        # Sampling index ramps uses the same grid rounding as resizing the image.
+        indices = []
+        for size, resized_size, output_size in zip(
+            image.shape, resized_shape, output_shape
+        ):
+            axis_indices = np.arange(size, dtype=np.intp)
+            if size != resized_size:
+                axis_indices = skimage.transform.resize(
+                    axis_indices, (resized_size,), order=0
+                )
+            indices.append(axis_indices[:output_size])
+        return image[np.ix_(*indices)]
+
+    # Retain filtering and the numeric conversions of the existing block resize.
+    output_slices = tuple(slice(0, size) for size in output_shape)
+    resized = skimage.transform.resize(image, resized_shape, order=0)
+    return resized[output_slices].astype(image.dtype, copy=False)
 
 
 def add_zarr_level(

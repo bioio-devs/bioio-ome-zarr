@@ -20,6 +20,7 @@ from .metadata import (
 from .utils import (
     DimSeq,
     PerLevelDimSeq,
+    _resize_region,
     multiscale_chunk_size_from_memory_target,
     resize,
 )
@@ -663,7 +664,6 @@ class OMEZarrWriter:
 
         level0_shape = self.datasets[0].shape
         np_cur = data
-        cur = da.from_array(np_cur, chunks=np_cur.shape)
         region_level: Tuple[slice, ...] = region
         for level_index, array in enumerate(self.datasets):
             if level_index > 0:
@@ -672,17 +672,14 @@ class OMEZarrWriter:
                     max(1, int((region[ax].stop - region[ax].start) * scales[ax]))
                     for ax in range(data.ndim)
                 )
-                cur = resize(cur, scaled_shape, order=0).astype(data.dtype)
+                np_cur = _resize_region(np_cur, scaled_shape)
                 region_level = tuple(
                     slice(
                         int(region[ax].start * scales[ax]),
-                        int(region[ax].start * scales[ax]) + int(cur.shape[ax]),
+                        int(region[ax].start * scales[ax]) + scaled_shape[ax],
                     )
                     for ax in range(data.ndim)
                 )
-
-                np_cur = cur.compute(scheduler="synchronous")
-                cur = da.from_array(np_cur, chunks=np_cur.shape)
 
             array[region_level] = np_cur
 

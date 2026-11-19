@@ -14,6 +14,7 @@ from ngff_zarr.validate import validate as ngff_validate
 
 from bioio_ome_zarr import Reader
 from bioio_ome_zarr.writers import AttributesSpec, Channel, OMEZarrWriter
+from bioio_ome_zarr.writers.utils import resize
 
 from ..conftest import LOCAL_RESOURCES_DIR
 
@@ -682,6 +683,48 @@ def test_full_vs_timepoints_equivalence(
             expected_shard = shard_shape[lvl]
             assert arr_full.shards == expected_shard
             assert arr_tp.shards == expected_shard
+
+
+@pytest.mark.parametrize(
+    "dtype,x_sizes",
+    [
+        ("uint16", (16, 8, 4)),
+        ("uint16", (25, 7, 3)),
+        ("uint16", (14, 9, 6)),
+        ("float32", (16, 8, 4)),
+        ("uint64", (16, 8, 4)),
+        ("bool", (16, 8, 4)),
+    ],
+    ids=["integer", "round-up", "split-chunk", "float", "wide-integer", "boolean"],
+)
+def test_write_region_matches_resize(
+    tmp_path: pathlib.Path, dtype: str, x_sizes: Tuple[int, ...]
+) -> None:
+    # The fractional sizes include both rounding up and splitting the input chunk.
+    shapes = [(2, 1, 2, y, x) for y, x in zip((12, 6, 3), x_sizes)]
+    rng = np.random.default_rng(173)
+    block = rng.integers(0, 8, size=(1, *shapes[0][1:])).astype(dtype)[..., ::-1]
+    if dtype == "uint64":
+        block += np.uint64(2**60)
+    region = (slice(1, 2), *(slice(0, size) for size in block.shape[1:]))
+
+    writer = OMEZarrWriter(
+        store=str(tmp_path / "region.zarr"),
+        level_shapes=shapes,
+        dtype=block.dtype,
+    )
+    writer.write_region(block, region)
+
+    expected = block
+    for level, (dataset, shape) in enumerate(zip(writer.datasets, shapes)):
+        if level > 0:
+            expected = resize(
+                da.from_array(expected, chunks=expected.shape),
+                (1, *shape[1:]),
+                order=0,
+            ).compute(scheduler="synchronous")
+        np.testing.assert_array_equal(dataset[1:2], expected)
+        np.testing.assert_array_equal(dataset[0], 0)
 
 
 def _open_and_write_region(
