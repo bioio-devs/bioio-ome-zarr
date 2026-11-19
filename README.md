@@ -311,6 +311,32 @@ writer.write_full_volume(
 )
 ```
 
+### Writing pyramid offsets
+
+Use `translations` to specify one offset per axis for each pyramid level,
+including level 0. Offsets are in the declared axis units and follow the
+level's scale transform. Choose offsets that match how the pyramid was sampled.
+
+```python
+import numpy as np
+from bioio_ome_zarr import Reader
+from bioio_ome_zarr.writers import OMEZarrWriter
+
+writer = OMEZarrWriter(
+    "translated.zarr",
+    level_shapes=[(8, 8), (4, 4)],
+    dtype="uint8",
+    axes_units=["micrometer", "micrometer"],
+    physical_pixel_size=[0.5, 0.5],
+    translations=[(10.0, 20.0), (10.25, 20.25)],  # Y, X
+)
+writer.write_full_volume(np.zeros((8, 8), dtype="uint8"))
+
+reader = Reader("translated.zarr")
+reader.set_resolution_level(1)
+print(reader.xarray_dask_data.coords["Y"].values)  # [10.25, 11.25, 12.25, 13.25]
+```
+
 ### Writing to S3 (or any fsspec URL)
 
 ```python
